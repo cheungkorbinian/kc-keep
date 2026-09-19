@@ -1,0 +1,32 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.log
+
+# Tiny Swords / Pixel Frog art packs — keep local only, do not publish
+Buildings/
+Units/
+Terrain/
+UI Elements/
+Particle FX/
+Tiny Swords (Enemy Pack)/
+Tiny Swords (Update 010)/
+
+# Local preview dumps / debug
+game/_fence_preview.png
+game/stack_*.png
+game/*.aseprite
+
+# Packaging output
+dist/
+*.zip
+!game/assets/**
+
+# Env / secrets
+.env
+.env.*
+credentials*
+*.pem
