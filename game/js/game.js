@@ -11,6 +11,10 @@
   const STATE = { BOOT: 0, MENU: 1, CHAR: 6, CODEX: 7, PLAY: 2, PAUSE: 3, DEAD: 4, WIN: 5 };
 
   let charPick = "wilson";
+  let fireSystem = null, worldBaseline = null;
+  let defeatedEntities = new Set();
+  let journey = newJourney();
+  let panelPreviousState = STATE.MENU;
   const CHARACTERS = [
     { id: "wilson", name: "KC1", desc: "均衡幸存者 · 生命/饥饿 150（DST）", hp: 150, hunger: 150, corr: 0, speed: 175 },
     { id: "willow", name: "KC2", desc: "喜火不怕黑 · 生命 120 · 火旁回理智", hp: 120, hunger: 150, corr: 5, speed: 180, fireSanity: true },
@@ -2464,6 +2468,7 @@
         if ((p.nest || 0) >= 5) p.denTier = 3;
       }
     }
+    captureWorldBaseline();
     revealFog(player.x, player.y, 16);
     buildMinimap();
     toast("饥荒式大陆已生成：任务分区相连，外圈是海。跟紧营火向外探索。", 5);
@@ -2885,29 +2890,31 @@
     else if (e.pack && fw >= 256) scale = 0.78;
     else if (e.pack) scale = 0.95;
     else if (e.kind === "player") scale = 1;
-    // Must match drawActor foot offset so the circle sits on the visible body
+    // Keep body near feet so standing south/east still connects (was oy*0.52 → "must stand above")
     const oy = e.kind === "sheep" ? fh - 18 : Math.min(168, fh * scale * 0.82);
-    const bodyY = e.y - oy * 0.52;
-    const r = Math.max(e.r || 18, Math.min(46, fw * scale * 0.17));
+    const bodyY = e.y - oy * 0.28;
+    const r = Math.max(e.r || 18, Math.min(52, fw * scale * 0.2));
     return { x: e.x, y: bodyY, r, foot: oy, feetY: e.y };
   }
 
-  /** Prop pick/reach. Trees & ores use base (trunk/feet) — canopy mid made F miss while standing at the trunk. */
+  /** Prop pick/reach — centered on trunk/feet so south-side chops register. */
   function propHit(p) {
     if (!p) return { x: 0, y: 0, r: 24 };
     const fw = p.fw || 64, fh = p.fh || 64;
     if (p.kind === "tree" || p.kind === "stump" || p.kind === "deadTree") {
-      return { x: p.x, y: p.y - 18, r: 30 };
+      return { x: p.x, y: p.y, r: 46 };
     }
-    if (p.kind === "gold") return { x: p.x, y: p.y - 20, r: 34 };
-    if (p.kind === "rock") return { x: p.x, y: p.y - 12, r: 24 };
+    if (p.kind === "berry" || p.kind === "bush") {
+      return { x: p.x, y: p.y, r: 38 };
+    }
+    if (p.kind === "gold") return { x: p.x, y: p.y - 8, r: 36 };
+    if (p.kind === "rock") return { x: p.x, y: p.y - 4, r: 28 };
     let oy = fh - 16;
     if (p.kind === "fence" || p.kind === "haywall" || p.kind === "woodwall" || p.kind === "stonewall") oy = 48;
-    else if (p.kind === "berry" || p.kind === "bush") oy = (fh || 128) - 16;
     else if (p.kind === "beehive") oy = 120;
     else if (p.kind === "chest") oy = 28;
     else if (p.kind === "meatrack") oy = 52;
-    const bodyY = p.y - oy * 0.45;
+    const bodyY = p.y - oy * 0.35;
     const r = Math.max(18, Math.min(58, Math.max(fw, fh) * 0.22));
     return { x: p.x, y: bodyY, r };
   }
@@ -2981,6 +2988,7 @@
         idleFrames: pack.idleFrames, runFrames: pack.runFrames, atkFrames: pack.atkFrames,
         nightOnly: !!pack.nightOnly,
         ranged: pack.ranged || null,
+        filter: pack.filter || null,
       };
       if (kind === "harpoon_shark" || kind === "paddle_shark" || kind === "bomb_fish") e.aquatic = true;
     } else {
@@ -3443,15 +3451,7 @@ function spawnPickup(x, y, kind) {
   }
 
   function applyFire(c, r, power) {
-    if (!inb(c, r)) return;
-    const t = world.tiles[idx(c, r)];
-    if (t === T_WATER || t === T_ICE) {
-      world.wet[idx(c, r)] = 0;
-      return;
-    }
-    if (t === T_ASH) return;
-    world.burn[idx(c, r)] = Math.max(world.burn[idx(c, r)], power || 1);
-    world.fireAge[idx(c, r)] = 0;
+    return fireSystem ? fireSystem.ignite(c, r, power || 1) : false;
   }
 
   function freezeWater(c, r) {
@@ -3567,6 +3567,7 @@ function spawnPickup(x, y, kind) {
     e.dead = true;
     e.hp = 0;
     burst(e.x, e.y - 20, "boom");
+    if (Number.isInteger(e.persistId)) defeatedEntities.add(e.persistId);
     if (e.kind === "sheep") {
       spawnPickup(e.x, e.y, "meat");
       floatText(e.x, e.y, "羊肉", "#ff8a8a");
@@ -3586,7 +3587,7 @@ function spawnPickup(x, y, kind) {
     if (e === warlord) {
       quests.find((q) => q.id === "warlord").done = true;
       toast("红堡僭主已陨落。这座岛暂时安静了。", 5);
-      player._winTimer = 1.4;
+      toast("继续重建 KC KEEP 至 3 级，即可完成远征。", 5);
     }
     if (e.kind === "bat_queen") {
       const q = quests.find((x) => x.id === "batqueen");
@@ -3673,6 +3674,7 @@ function spawnPickup(x, y, kind) {
       floatText(e.x, e.y, "丝绸", "#e8e0f0");
     }
     if (e.kind === "player") {
+      journey.tutorial.night=false;
       dropCorpse();
       toast("你倒下了……物资落在原地。点击可在营火旁重生。", 4);
       state = STATE.DEAD;
@@ -3760,14 +3762,14 @@ function spawnPickup(x, y, kind) {
       : [player];
     for (const t of targets) {
       const th = actorHit(t);
-      // Feet decide "in reach"; body decides aim — clicking/aiming the torso now connects
+      // Feet-to-feet reach (direction-agnostic); body used only for aim arc
       const dFeet = dist(origin.x, origin.y, t.x, t.y);
-      if (dFeet > range + th.r) continue;
+      if (dFeet > range + th.r + 10) continue;
       const a = Math.atan2(th.y - oh.y, th.x - oh.x);
       let diff = Math.abs(a - ang);
       if (diff > Math.PI) diff = Math.PI * 2 - diff;
-      // Wide arc when very close (DST bump); tighter when aiming from afar
-      const arc = dFeet < 36 ? 1.55 : 1.25;
+      // Close = nearly full circle so standing below/beside still hits
+      const arc = dFeet < 52 ? Math.PI : (dFeet < 78 ? 1.85 : 1.35);
       if (diff < arc) {
         hurt(t, dmg, "melee");
         burst((origin.x + th.x) / 2, (oh.y + th.y) / 2, "dust");
@@ -3811,14 +3813,20 @@ function spawnPickup(x, y, kind) {
     toast("附近没有可修的栅栏/木箱。");
   }
 
-  function tryHarvest(x, y, range) {
+  function tryHarvest(x, y, range, target) {
     const tool = player.tool || "axe";
     const nearProp = (p, mul) => {
       const h = propHit(p);
       return dist(x, y, h.x, h.y) <= range + h.r * (mul == null ? 0.35 : mul);
     };
-    // Berry pick (knife or bare tool near ripe berry)
-    for (const p of props) {
+    const candidates = target
+      ? (props.includes(target) && !target.gone ? [target] : [])
+      : props.filter((p) => !p.gone).sort((a, b) => {
+        const ah = propHit(a), bh = propHit(b);
+        return dist(x, y, ah.x, ah.y) - dist(x, y, bh.x, bh.y);
+      });
+    // Soft crops do not require a chopping tool.
+    for (const p of candidates) {
       if (p.kind === "berry" && p.ripe && nearProp(p)) {
         p.ripe = false;
         p.grow = 0;
@@ -3841,12 +3849,12 @@ function spawnPickup(x, y, kind) {
         return;
       }
     }
-    for (const p of props) {
+    for (const p of candidates) {
       if (p.hp <= 0) continue;
       if (p.kind !== "tree" && p.kind !== "gold" && p.kind !== "rock" && p.kind !== "bush" && p.kind !== "spiderden") continue;
-      if (tool === "axe" && (p.kind === "gold" || p.kind === "rock")) continue;
-      if (tool === "pickaxe" && (p.kind === "tree" || p.kind === "bush" || p.kind === "spiderden")) continue;
-      if (!nearProp(p, (p.kind === "gold" || p.kind === "rock") ? 0.55 : 0.4)) continue;
+      const requiredTool = (p.kind === "gold" || p.kind === "rock") ? "pickaxe" : "axe";
+      if (tool !== requiredTool) { if(target)toast(requiredTool === "axe" ? "需要斧头。" : "需要镐子。"); continue; }
+      if (!nearProp(p, (p.kind === "gold" || p.kind === "rock") ? 0.55 : 0.4)) { if(target)toast("目标太远了，请靠近。"); continue; }
       if (p.kind === "gold" || p.kind === "rock") ensureMineStats(p);
       if (window.DstSys && toolDur) {
         const tk = (p.kind === "gold" || p.kind === "rock") ? "pickaxe" : "axe";
@@ -3965,7 +3973,7 @@ function spawnPickup(x, y, kind) {
     projectiles.push({
       kind: type, x: ph.x, y: ph.y,
       vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
-      life: 1.15, r: 14, from: "player",
+      life: 1.15, r: 14, from: "player", igniteX: aimX, igniteY: aimY,
     });
   }
 
@@ -4197,6 +4205,7 @@ function spawnPickup(x, y, kind) {
     if (monk && dist(player.x, player.y, monk.x, monk.y) < 70) return "祈祷";
     if (nearestFire(78)) {
       const f = nearestFire(78);
+      if (f && ((inv.wood || 0) > 0 || (inv.charcoal || 0) > 0)) return "添柴";
       if (f && f.lit && ((inv.meat || 0) > 0 || (inv.fish || 0) > 0) && !roastJob) return "烤制";
       return "添柴";
     }
@@ -4368,6 +4377,14 @@ function spawnPickup(x, y, kind) {
     }
     if (act.type === "harvest") {
       facePoint(tx, ty);
+      // Soft forage (ripe berry / crop): pick immediately — knife swing never called tryHarvest before
+      if (act.target && ((act.target.kind === "berry" && act.target.ripe)
+          || (act.target.kind === "farm" && act.target.planted && act.target.stage >= 3))) {
+        if (player.form === "warrior") setForm("pawn", true);
+        player.tool = "knife";
+        tryHarvest(player.x, player.y, 72, act.target);
+        return;
+      }
       // Prefer correct tool for this prop
       if (act.target) {
         if (act.target.kind === "gold" || act.target.kind === "rock") player.tool = "pickaxe";
@@ -4375,7 +4392,8 @@ function spawnPickup(x, y, kind) {
         else if (act.target.kind === "fence" || act.target.kind === "haywall" || act.target.kind === "woodwall" || act.target.kind === "stonewall") player.tool = "hammer";
         else player.tool = "knife";
       }
-      startAttack(false);
+      if (player.form === "warrior") setForm("pawn", true);
+      startAttack(false, act.target);
       return;
     }
     if (act.type === "pickup") {
@@ -4503,8 +4521,8 @@ function spawnPickup(x, y, kind) {
     let best = null, bestD = range;
     for (const e of entities) {
       if (e.dead || (!e.enemy && !e.animal)) continue;
-      const h = actorHit(e);
-      const d = dist(player.x, player.y, h.x, h.y) - h.r * 0.3;
+      // Feet distance — body-centered range unfairly favored standing north of tall sprites
+      const d = dist(player.x, player.y, e.x, e.y) - (e.r || 14);
       if (d < bestD) { bestD = d; best = e; }
     }
     return best;
@@ -4537,9 +4555,11 @@ function spawnPickup(x, y, kind) {
     return 6; // axe / pickaxe
   }
 
-  function startAttack(forceCombat) {
+  function startAttack(forceCombat, harvestTarget) {
     if (player.attacking > 0 || player.dead) return;
-    faceMouse();
+    player.harvestTarget = harvestTarget || null;
+    if (harvestTarget) facePoint(harvestTarget.x, harvestTarget.y);
+    else faceMouse();
 
     // Armed form: warrior sword combos. Auto-slip to pawn if clearly harvesting.
     if (player.form === "warrior") {
@@ -4569,7 +4589,7 @@ function spawnPickup(x, y, kind) {
       if (foe) facePoint(foe.x, foe.y);
       tool = "knife";
     } else {
-      tool = pickPlayerTool();
+      tool = harvestTarget ? player.tool : pickPlayerTool();
     }
     player.tool = tool;
     player.hold = tool;
@@ -4609,9 +4629,17 @@ function spawnPickup(x, y, kind) {
         const hd = dist(player.x, player.y, h.x, h.y) - h.r * 0.35;
         if (hd <= 68) {
           faceToward(harvest.x, harvest.y);
-          if (harvest.kind === "gold" || harvest.kind === "rock") player.tool = "pickaxe";
-          else if (harvest.kind === "tree" || harvest.kind === "bush") player.tool = "axe";
-          startAttack(false);
+          if ((harvest.kind === "berry" && harvest.ripe)
+              || (harvest.kind === "farm" && harvest.planted && harvest.stage >= 3)) {
+            if (player.form === "warrior") setForm("pawn", true);
+            player.tool = "knife";
+            tryHarvest(player.x, player.y, 72, harvest);
+          } else {
+            if (harvest.kind === "gold" || harvest.kind === "rock") player.tool = "pickaxe";
+            else if (harvest.kind === "tree" || harvest.kind === "bush" || harvest.kind === "spiderden") player.tool = "axe";
+            if (player.form === "warrior") setForm("pawn", true);
+            startAttack(false, harvest);
+          }
         }
       }
     }
@@ -4737,6 +4765,7 @@ function spawnPickup(x, y, kind) {
       } else {
         const tool = player.tool || "knife";
         if (tool === "knife") {
+          // Soft crops are picked directly; combat must not harvest nearby props.
           let kd = 16 + (player.buffPower > 0 ? 6 : 0);
           if (player._mighty) kd = Math.floor(kd * 1.35);
           if (player._wimpy) kd = Math.floor(kd * 0.7);
@@ -4745,7 +4774,7 @@ function spawnPickup(x, y, kind) {
           tryRepair(player.x, player.y, 56);
           meleeHit(player, 42, player.facing, 8);
         } else {
-          tryHarvest(player.x, player.y, 56);
+          tryHarvest(player.x, player.y, 64, player.harvestTarget);
           meleeHit(player, 40, player.facing, 6);
         }
       }
@@ -4857,7 +4886,7 @@ function spawnPickup(x, y, kind) {
     else if (nearF) {
       if (roastJob) interactHint = "空格  烤制中 " + Math.ceil(Math.max(0, roastJob.need - roastJob.t)) + "s";
       else if (nearF.lit && ((inv.meat || 0) > 0 || (inv.fish || 0) > 0))
-        interactHint = "空格  烤制生肉/鱼 · Shift+空格 添柴 · 燃料 " + Math.floor(nearF.fuel || 0);
+        interactHint = "空格  添柴 · Shift+空格 烤制 · 燃料 " + Math.floor(nearF.fuel || 0);
       else interactHint = "空格  添柴 · 燃料 " + Math.floor(nearF.fuel || 0) + (nearF.lit ? "" : " · 已熄灭");
     }
     else if (nearChest) interactHint = "空格  打开/关闭木箱";
@@ -4967,9 +4996,15 @@ function spawnPickup(x, y, kind) {
     if (cookOpen) { tryCookSlots(); return; }
     if (craftOpen || bagOpen || chestOpen) return;
     const harvestOnly = !!opts.harvestOnly;
+    const fire = nearestFire(70);
+    const hasFuelItem = ((inv.wood || 0) > 0 || (inv.charcoal || 0) > 0);
+    // Prefer campfire fuel when standing by the fire with wood (trees near camp used to steal Space)
+    if (!harvestOnly && fire && hasFuelItem && dist(player.x, player.y, fire.x, fire.y) < 64) {
+      tryInteract();
+      return;
+    }
     const harvest = nearestHarvestable(harvestOnly ? 78 : 70, { resourcesOnly: true })
       || (!harvestOnly ? nearestHarvestable(56) : null);
-    const fire = nearestFire(52);
     if (harvest) {
       const h = propHit(harvest);
       const hd = dist(player.x, player.y, h.x, h.y) - h.r * 0.35;
@@ -4980,6 +5015,9 @@ function spawnPickup(x, y, kind) {
           if (fd + 12 < hd) preferHarvest = false;
         }
         if (isResourceProp(harvest)) preferHarvest = true;
+        if (!harvestOnly && fire && hasFuelItem && dist(player.x, player.y, fire.x, fire.y) + 18 < hd) {
+          preferHarvest = false;
+        }
         if (!harvestOnly && !isResourceProp(harvest)) {
           const chest = props.find((p) => p.kind === "chest" && dist(player.x, player.y, p.x, p.y) < 52);
           if (chest && dist(player.x, player.y, chest.x, chest.y) + 10 < hd) preferHarvest = false;
@@ -5030,34 +5068,44 @@ function spawnPickup(x, y, kind) {
         fire.fuel = Math.min(120, (fire.fuel || 0) + 35);
         fire.lit = true;
         syncPrimaryFire();
+        journey.tutorial.fuel = true;
         toast("重新点燃了火坑。", 2);
         return;
       }
-      // Campfire roast (DST): cook raw meat/fish on the fire
+      // Campfire: Space adds fuel by default; Shift+Space roasts (was inverted — blocked 添柴 while lit)
       if (roastJob) {
         toast("还在烤……约 " + Math.ceil(Math.max(0, roastJob.need - roastJob.t)) + " 秒。", 1.5);
         return;
       }
-      if (fire.lit && fire.fuel > 0 && ((inv.meat || 0) > 0 || (inv.fish || 0) > 0) && !keys.has("ShiftLeft") && !keys.has("ShiftRight")) {
+      const shiftFuel = keys.has("ShiftLeft") || keys.has("ShiftRight");
+      const canRoast = fire.lit && fire.fuel > 0 && ((inv.meat || 0) > 0 || (inv.fish || 0) > 0);
+      if (canRoast && shiftFuel) {
         const fish = (inv.fish || 0) > 0 && ((inv.meat || 0) <= 0 || rand() < 0.5);
         if (fish) inv.fish--; else inv.meat--;
         roastJob = { t: 0, need: 3.2, out: "cooked", name: fish ? "烤鱼" : "烤肉" };
         toast("架上火边烤制……", 2);
         return;
       }
+      if (fire.fuel >= 160) { toast("燃料已满。", 1.5); return; }
       if ((inv.charcoal || 0) > 0) {
         inv.charcoal--;
         fire.fuel = Math.min(160, (fire.fuel || 0) + 42);
         fire.lit = true;
         syncPrimaryFire();
+        journey.tutorial.fuel = true;
         toast("添了木炭。燃料 " + Math.floor(fire.fuel));
         return;
       }
-      if (inv.wood <= 0) { toast("没有木头/木炭可添柴。Shift+空格可强制添柴（若有肉则先烤）。"); return; }
+      if ((inv.wood || 0) <= 0) {
+        if (canRoast) toast("没有木头/木炭。按住 Shift+空格 可烤生肉/鱼。");
+        else toast("没有木头/木炭可添柴。");
+        return;
+      }
       inv.wood--;
-      fire.fuel = Math.min(140, (fire.fuel || 0) + 28);
+      fire.fuel = Math.min(160, (fire.fuel || 0) + 28);
       fire.lit = true;
       syncPrimaryFire();
+      journey.tutorial.fuel = true;
       toast("添了一捆柴。燃料 " + Math.floor(fire.fuel));
       return;
     }
@@ -6174,9 +6222,8 @@ function spawnPickup(x, y, kind) {
         }
         if (smolderJob.t >= smolderJob.need) {
           const c = smolderJob.c, r = smolderJob.r;
-          applyFire(c, r, 1.2);
-          applyFire(c + 1, r, 1); applyFire(c, r + 1, 1);
-          toast("闷烧爆成野火！快用水域或冰法截断。", 3.5);
+          applyFire(c, r, 1.1);
+          toast("闷烧爆成野火！雨天或冰法可截断。", 3.5);
           smolderJob = null;
         }
       } else {
@@ -6189,7 +6236,7 @@ function spawnPickup(x, y, kind) {
           const fy = player.y + Math.sin(ang) * distAway;
           const c = Math.floor(fx / TILE), r = Math.floor(fy / TILE);
           if (inb(c, r) && (world.tiles[idx(c, r)] === T_GRASS || world.tiles[idx(c, r)] === T_MAGIC) && world.burn[idx(c, r)] <= 0) {
-            smolderJob = { t: 0, need: 3.2 + rand() * 1.2, c, r };
+            smolderJob = { t: 0, need: 6, c, r };
             toast("地面开始冒烟……野火将至！", 3);
             floatText((c + 0.5) * TILE, r * TILE, "闷烧", "#c07040");
           }
@@ -7053,10 +7100,14 @@ function spawnPickup(x, y, kind) {
       if (p.life <= 0 || !inb(c, r)) { projectiles.splice(i, 1); continue; }
 
       if (p.kind === "fire") {
-        if (world.tiles[idx(c, r)] === T_GRASS || world.tiles[idx(c, r)] === T_MAGIC) applyFire(c, r, 1);
+        if (!p.ignited && (dist(p.x,p.y,p.igniteX == null ? p.x : p.igniteX,p.igniteY == null ? p.y : p.igniteY)<24 || p.life<0.1)) {
+          applyFire(c,r,1);p.ignited=true;
+        }
         if (world.tiles[idx(c, r)] === T_WATER) { burst(p.x, p.y, "splash"); projectiles.splice(i, 1); continue; }
         hitScan(p, i, 22, "fire");
       } else if (p.kind === "ice") {
+        fireSystem.extinguish(c,r,1);
+        if(smolderJob&&Math.abs(smolderJob.c-c)<=1&&Math.abs(smolderJob.r-r)<=1)smolderJob=null;
         freezeWater(c, r);
         freezeWater(c + 1, r); freezeWater(c - 1, r); freezeWater(c, r + 1); freezeWater(c, r - 1);
         hitScan(p, i, 14, "ice");
@@ -7119,6 +7170,10 @@ function spawnPickup(x, y, kind) {
 
   function updateTiles(dt) {
     let wallsBurned = false;
+    if (fireSystem) fireSystem.update(dt);
+    // Props damaged once per frame by checking their tile (not props×burningTiles)
+    const burnPropsPass = [];
+
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const i = idx(c, r);
@@ -7142,39 +7197,30 @@ function spawnPickup(x, y, kind) {
         }
 
         if (world.burn[i] > 0) {
-          world.fireAge[i] += dt;
-          if (world.wet[i] > 0.6) { world.burn[i] = 0; continue; }
-          if (world.fireAge[i] > 1.6) {
-            for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-              const ni = idx(c + dc, r + dr);
-              if (inb(c + dc, r + dr) && (world.tiles[ni] === T_GRASS || world.tiles[ni] === T_MAGIC) && world.burn[ni] <= 0 && rand() < 0.15) {
-                applyFire(c + dc, r + dr, 1);
-              }
-            }
-            for (const p of props) {
-              if (p.kind === "tree" && p.hp > 0 && Math.floor(p.x / TILE) === c && Math.floor(p.y / TILE) === r) {
-                p.hp -= dt * 1.2;
-                if (p.hp <= 0) {
-                  p.kind = "stump"; p.img = imgs.stump; p.frames = 1; p.burnt = true;
-                  spawnPickup(p.x, p.y, "charcoal");
-                  if (rand() < 0.45) spawnPickup(p.x + 10, p.y, "charcoal");
-                }
-              }
-              // Hay / wood walls catch fire
-              if ((p.kind === "haywall" || p.kind === "woodwall") && p.hp > 0
-                  && Math.floor(p.x / TILE) === c && Math.floor(p.y / TILE) === r) {
-                p.hp -= dt * (p.kind === "haywall" ? 2.4 : 1.1);
-                if (p.hp <= 0) {
-                  p.gone = true; wallsBurned = true;
-                  burst(p.x, p.y, "boom");
-                  if (p.kind === "haywall" && rand() < 0.4) spawnPickup(p.x, p.y, "grass");
-                }
-              }
-            }
+          if (world.fireAge[i] > 1.0) burnPropsPass.push(i);
+        }
+      }
+    }
+
+    if (burnPropsPass.length) {
+      const burningSet = new Set(burnPropsPass);
+      for (const p of props) {
+        if (!p || p.hp <= 0) continue;
+        const pc = Math.floor(p.x / TILE), pr = Math.floor(p.y / TILE);
+        if (!inb(pc, pr) || !burningSet.has(idx(pc, pr))) continue;
+        if (p.kind === "tree") {
+          p.hp -= dt * 1.2;
+          if (p.hp <= 0) {
+            p.kind = "stump"; p.img = imgs.stump; p.frames = 1; p.burnt = true;
+            spawnPickup(p.x, p.y, "charcoal");
+            if (rand() < 0.45) spawnPickup(p.x + 10, p.y, "charcoal");
           }
-          if (world.fireAge[i] > 5.5) {
-            world.burn[i] = 0;
-            if (world.tiles[i] === T_GRASS || world.tiles[i] === T_MAGIC) world.tiles[i] = T_ASH;
+        } else if (p.kind === "haywall" || p.kind === "woodwall") {
+          p.hp -= dt * (p.kind === "haywall" ? 2.4 : 1.1);
+          if (p.hp <= 0) {
+            p.gone = true; wallsBurned = true;
+            burst(p.x, p.y, "boom");
+            if (p.kind === "haywall" && rand() < 0.4) spawnPickup(p.x, p.y, "grass");
           }
         }
       }
@@ -7207,6 +7253,7 @@ function spawnPickup(x, y, kind) {
       if (extra > 0) player.hunger = Math.max(0, player.hunger - dt * 0.35 * extra);
     }
     updateSurvival(dt);
+    updateJourney(dt);
     updateWatchtowers(dt);
     updatePirateTower(dt);
     if (testMode && player && !player.dead) {
@@ -7691,6 +7738,7 @@ function spawnPickup(x, y, kind) {
     if (e.dead && e.kind !== "player") ctx.globalAlpha = Math.max(0, 1 - (e._fade || 0) / 2.5);
     if (e.phantom) ctx.globalAlpha *= 0.72;
     if (e.hurt > 0) ctx.filter = "brightness(2)";
+    else if (e.filter) ctx.filter = e.filter;
     drawShadow(e.x, e.y, e.kind === "warlord" || e.kind === "bear" || e.kind === "troll" ? 1.3 : 1);
     const [img, fw, fh] = unitSheet(e);
     let scale = 1;
@@ -7702,6 +7750,8 @@ function spawnPickup(x, y, kind) {
     else if (e.kind === "panda" || e.kind === "pig_rider") scale = 0.72;
     else if (e.kind === "lancer" || e.kind === "blue_lancer" || e.kind === "yellow_lancer"
         || e.kind === "purple_lancer" || e.kind === "black_lancer") scale = 0.88;
+    else if (e.kind === "crow") scale = 0.72;
+    else if (e.kind === "frog") scale = 0.88;
     else if (e.pack && fw >= 256) scale = 0.78;
     else if (e.pack) scale = 0.95;
     else if (fh >= 300) scale = 0.88; // tall Free Pack sheets (320 cells)
@@ -8728,8 +8778,8 @@ function spawnPickup(x, y, kind) {
     ctx.font = "10px sans-serif";
     ctx.fillStyle = "#4a3828";
     ctx.textAlign = "left";
-    ctx.fillText("WASD 移动 · 左键 行动 · 右键 检查", mx + 14, tipY + 12);
-    ctx.fillText("空格 行动 · F 采集 · J 攻击 · C 施法", mx + 14, tipY + 26);
+    ctx.fillText(["KeyW","KeyA","KeyS","KeyD"].map(window.KCUI.label).join("")+" 移动 · 左键行动 · 右键检查", mx + 14, tipY + 12);
+    ctx.fillText(window.KCUI.label("Space")+" 行动 · "+window.KCUI.label("KeyF")+" 采集 · "+window.KCUI.label("KeyJ")+" 攻击", mx + 14, tipY + 26);
 
     // Day dial tucked on header
     {
@@ -8846,12 +8896,12 @@ function spawnPickup(x, y, kind) {
     ];
 
     const acts = [
-      { icon: imgs.icoActForm || imgs.icoSword, key: "Q", label: player.form === "warrior" ? "武装" : "形态", fire: false },
-      { icon: imgs.icoActUse || imgs.icoGem, key: "空格", label: interactVerbNearby() || "行动", fire: false },
-      { icon: imgs.icoActGather || imgs.icoActHammer, key: "F", label: "采集", fire: false },
-      { icon: imgs.icoSword || imgs.icoActForm, key: "J", label: "攻击", fire: false },
-      { icon: imgs.icoActEat || imgs.icoMeat || imgs.meatIcon, key: "R", label: "进食", fire: false },
-      { icon: imgs.icoActTorch || imgs.icoGem, key: "T", label: "照明", fire: true },
+      { icon: imgs.icoActForm || imgs.icoSword, key: window.KCUI.label("KeyQ"), label: player.form === "warrior" ? "武装" : "形态", fire: false },
+      { icon: imgs.icoActUse || imgs.icoGem, key: window.KCUI.label("Space"), label: interactVerbNearby() || "行动", fire: false },
+      { icon: imgs.icoActGather || imgs.icoActHammer, key: window.KCUI.label("KeyF"), label: "采集", fire: false },
+      { icon: imgs.icoSword || imgs.icoActForm, key: window.KCUI.label("KeyJ"), label: "攻击", fire: false },
+      { icon: imgs.icoActEat || imgs.icoMeat || imgs.meatIcon, key: window.KCUI.label("KeyR"), label: "进食", fire: false },
+      { icon: imgs.icoActTorch || imgs.icoGem, key: window.KCUI.label("KeyT"), label: "照明", fire: true },
     ];
 
     const spells = [
@@ -9171,7 +9221,7 @@ function spawnPickup(x, y, kind) {
     ctx.fillText("背包 · " + maxSlots + " 格（饥荒式堆叠）", W / 2, py + 28);
     ctx.font = "11px sans-serif";
     ctx.fillStyle = "#d8c8a8";
-    ctx.fillText("I 关闭 · 色条为新鲜度" + ((inv.warmstone || 0) > 0 ? " · 暖石热量 " + Math.round(warmstoneHeat) : ""), W / 2, py + 48);
+    ctx.fillText(window.KCUI.label("KeyI")+" 关闭 · 色条为新鲜度" + ((inv.warmstone || 0) > 0 ? " · 暖石热量 " + Math.round(warmstoneHeat) : ""), W / 2, py + 48);
     bagHover = -1;
     for (let i = 0; i < maxSlots; i++) {
       const col = i % cols, row = Math.floor(i / cols);
@@ -9795,6 +9845,7 @@ function spawnPickup(x, y, kind) {
           frames: def.idleFrames || 8,
           sheet: true,
           animFps: 7,
+          filter: def.filter || null,
           desc: tip + " 生命约 " + (def.hp || "?") + " · 伤害 " + (def.dmg || "?") + (def.nightOnly ? " · 夜行" : ""),
         });
       }
@@ -10025,6 +10076,7 @@ function spawnPickup(x, y, kind) {
     const inner = Math.max(8, box - pad * 2);
     ctx.imageSmoothingEnabled = false;
     const foot = align === "foot";
+    if (entry.filter) ctx.filter = entry.filter;
 
     if (entry.tile) {
       const tw = entry.fw || 64, th = entry.fh || 64;
@@ -10034,6 +10086,7 @@ function spawnPickup(x, y, kind) {
       const dx = x + (box - dw) / 2;
       const dy = foot ? (y + box - pad - dh) : (y + (box - dh) / 2);
       ctx.drawImage(img, tx, ty, tw, th, dx, dy, dw, dh);
+      ctx.filter = "none";
       ctx.restore();
       return;
     }
@@ -10063,6 +10116,7 @@ function spawnPickup(x, y, kind) {
       const dx = x + (box - dw) / 2;
       const dy = foot ? (y + box - pad - dh) : (y + (box - dh) / 2);
       ctx.drawImage(img, srcX, srcY, srcW, srcH, dx, dy, dw, dh);
+      ctx.filter = "none";
       ctx.restore();
       return;
     }
@@ -10075,6 +10129,7 @@ function spawnPickup(x, y, kind) {
     const dx = x + (box - dw) / 2;
     const dy = foot ? (y + box - pad - dh) : (y + (box - dh) / 2);
     ctx.drawImage(img, b.sx, b.sy, b.sw, b.sh, dx, dy, dw, dh);
+    ctx.filter = "none";
     ctx.restore();
   }
 
@@ -10664,6 +10719,51 @@ function spawnPickup(x, y, kind) {
     ctx.fillStyle = "#f4fff8";
     ctx.font = "bold 18px sans-serif";
     ctx.fillText(btn, W / 2, py + ph - 50);
+    drawPauseLike._hits = [{ id: "ok", x: W / 2 - 110, y: py + ph - 86, w: 220, h: 56 }];
+  }
+
+  function drawPauseMenu() {
+    ctx.fillStyle = "rgba(5,10,14,0.62)";
+    ctx.fillRect(0, 0, W, H);
+    const pw = Math.min(480, W - 40);
+    const ph = 300;
+    const px = W / 2 - pw / 2;
+    const py = H / 2 - ph / 2;
+    nineSlice(imgs.paper, px, py, pw, ph);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#3a2a1a";
+    ctx.font = "bold 30px sans-serif";
+    ctx.fillText("暂停", W / 2, py + 58);
+    ctx.font = "14px sans-serif";
+    wrapText("游戏已暂停。Esc 可返回主菜单。", W / 2, py + 96, pw - 64, 20);
+    const bw = 220, bh = 52;
+    const bx = W / 2 - bw / 2;
+    const by1 = py + ph - 148;
+    const by2 = py + ph - 82;
+    nineSlice(imgs.btn, bx, by1, bw, bh);
+    nineSlice(imgs.btn, bx, by2, bw, bh);
+    ctx.fillStyle = "#f4fff8";
+    ctx.font = "bold 17px sans-serif";
+    ctx.fillText("继续游戏", W / 2, by1 + bh / 2 + 6);
+    ctx.fillText("返回主菜单", W / 2, by2 + bh / 2 + 6);
+    drawPauseMenu._hits = [
+      { id: "resume", x: bx, y: by1, w: bw, h: bh },
+      { id: "menu", x: bx, y: by2, w: bw, h: bh },
+    ];
+  }
+
+  function returnToMainMenu() {
+    if ((state === STATE.PLAY || state === STATE.PAUSE) && !saveGame(true)) {
+      toast("存档失败，仍留在游戏中。请重试。", 3);
+      return;
+    }
+    clearMoveTarget();
+    craftOpen = false;
+    bagOpen = false;
+    cookOpen = false;
+    chestOpen = null;
+    state = STATE.MENU;
+    toast("已返回主菜单。", 2);
   }
 
   function wrapText(text, x, y, max, lh) {
@@ -10679,6 +10779,9 @@ function spawnPickup(x, y, kind) {
   }
 
   function resetRunState() {
+    for (const key of Object.keys(inv)) delete inv[key];
+    journey = newJourney();
+    inv.bucket = 0; inv.bucketWater = 0;
     inv.wood = 0; inv.gold = 0; inv.meat = 2; inv.fish = 0; inv.honey = 0; inv.torch = 0; inv.lantern = 0; inv.cooked = 0; inv.warKit = 0; inv.warmstone = 0; inv.berries = 0; inv.seeds = 0; inv.jam = 0; inv.meatpie = 0; inv.spicy = 0; inv.trail = 0; inv.feast = 0; inv.mapscroll = 0;
     inv.boards = 0; inv.rope = 0; inv.cutstone = 0; inv.rocks = 0; inv.monster = 0; inv.trinket = 0; inv.dung = 0; inv.flint = 0; inv.twigs = 0; inv.grass = 0; inv.carrot = 0; inv.carrot_seed = 0;
     inv.spear = 0; inv.hammer = 0; inv.shovel = 0; inv.umbrella = 0;
@@ -10736,6 +10839,20 @@ function spawnPickup(x, y, kind) {
   }
 
 
+  function applyCharacter(id) {
+    const ch = CHARACTERS.find((c) => c.id === id) || CHARACTERS[0];
+    charPick = ch.id;
+    player.charId = ch.id;
+    player.charName = ch.name;
+    player.maxHp = ch.hp + journey.keepLevel * 15;
+    player.maxHunger = ch.hunger || 150;
+    player.speed = ch.speed;
+    for (const trait of ["fireSanity", "robot", "mighty", "nightSanity", "lumberjack"]) {
+      player[trait] = !!ch[trait];
+    }
+    return ch;
+  }
+
   function startWithCharacter(id) {
     try {
       charPick = id || "wilson";
@@ -10750,18 +10867,10 @@ function spawnPickup(x, y, kind) {
         state = STATE.MENU;
         return;
       }
-      player.maxHp = ch.hp; player.hp = ch.hp;
-      player.maxHunger = ch.hunger || 150;
+      applyCharacter(ch.id);
+      player.hp = player.maxHp;
       player.hunger = player.maxHunger;
       player.corr = ch.corr;
-      player.speed = ch.speed;
-      player.charId = ch.id;
-      player.charName = ch.name;
-      player.fireSanity = !!ch.fireSanity;
-      player.robot = !!ch.robot;
-      player.mighty = !!ch.mighty;
-      player.nightSanity = !!ch.nightSanity;
-      player.lumberjack = !!ch.lumberjack;
       player.invul = 3;
       player.dead = false;
       if (ch.id === "willow") {
@@ -10782,7 +10891,7 @@ function spawnPickup(x, y, kind) {
       if (window.DstSys) {
         houndClock = window.DstSys.createHoundClock();
         wetness = window.DstSys.createWetness();
-        toolDur = window.DstSys.createTools();
+        if (!toolDur) toolDur = window.DstSys.createTools();
         seasonBossFlags = {};
         cookSlots = [null, null, null, null];
         window.DstSys.ensureSpoil(inv);
@@ -10794,54 +10903,73 @@ function spawnPickup(x, y, kind) {
     }
   }
 
+  const SAVED_PROP_KINDS = new Set([
+    "chest", "fence", "haywall", "woodwall", "stonewall", "farm", "berry", "beehive", "trap", "meatrack",
+  ]);
+
+  function packStructure(obj) {
+    const { pair, ...data } = obj;
+    const imageRefs = {};
+    for (const field of ['img', 'hi', 'stumpImg', '_summerImg']) {
+      if (obj[field]) {
+        const key = Object.keys(imgs).find(key => imgs[key] === obj[field]);
+        if (key) imageRefs[field] = key;
+      }
+      delete data[field];
+    }
+    if (Object.keys(imageRefs).length) data.imageRefs = imageRefs;
+    return data;
+  }
+
+  function unpackStructure(data) {
+    const { imageKey, imageRefs, ...obj } = data;
+    if (imageKey) obj.img = imgs[imageKey]; // v2 backups
+    for (const [field, key] of Object.entries(imageRefs || {})) {
+      if (['img', 'hi', 'stumpImg', '_summerImg'].includes(field)) obj[field] = imgs[key];
+    }
+    return obj;
+  }
+
   function saveGame(verbose) {
-    if (state !== STATE.PLAY || !player) return;
+    if ((state !== STATE.PLAY && state !== STATE.PAUSE) || !player) return false;
     try {
       const data = {
-        v: 1,
+        v: 3,
+        journey, worldChanges: snapshotWorld(),
+        structures: [], ownedBuildings: [],
+        toolDur, wetness, houndClock, seasonBossFlags,
+        cookJob, roastJob, cookSlots,
         worldSeed,
         dayT, seasonT, rain, rainTimer, spell, inCave,
         inv: { ...inv },
         runes: { ...runes },
         quests: quests.map((q) => ({ id: q.id, done: q.done })),
         player: {
+          charId: player.charId || "wilson",
           x: player.x, y: player.y, hp: player.hp, mp: player.mp,
           hunger: player.hunger, corr: player.corr, armor: player.armor || 0,
           torchOn: !!player.torchOn,
           form: player.form || "pawn",
           warRank: player.warRank || 0,
-          temp: player.temp || 55,
+          temp: player.temp == null ? 55 : player.temp,
           tech: player.tech ? { ...player.tech } : {},
         },
         fog: fog ? Array.from(fog) : null,
         overworldReturn,
         cavePlayer: inCave ? { x: player.x, y: player.y } : null,
-        fires: fires.map((f) => ({ x: f.x, y: f.y, lit: f.lit, fuel: f.fuel })),
-        chests: props.filter((p) => p.kind === "chest").map((p) => ({
-          x: p.x, y: p.y, store: { ...p.store },
-        })),
-        fences: props.filter((p) => p.kind === "fence").map((p) => ({ x: p.x, y: p.y })),
-        walls: props.filter((p) => p.kind === "stonewall").map((p) => ({ x: p.x, y: p.y })),
-        farms: props.filter((p) => p.kind === "farm").map((p) => ({
-          x: p.x, y: p.y, planted: !!p.planted, stage: p.stage || 0, grow: p.grow || 0,
-        })),
-        hives: props.filter((p) => p.kind === "beehive").map((p) => ({
-          x: p.x, y: p.y, honeyLeft: p.honeyLeft || 0,
-        })),
-        traps: props.filter((p) => p.kind === "trap").map((p) => ({
-          x: p.x, y: p.y, bait: p.bait || 0, sprung: !!p.sprung,
-        })),
-        towers: buildings.filter((b) => b.owned).map((b) => ({ x: b.x, y: b.y })),
+        fires: fires.map((f) => ({ x: f.x, y: f.y, lit: f.lit, fuel: f.fuel, pit: !!f.pit, permanent: !!f.permanent, endo: !!f.endo })),
         onIsland: !!onIsland,
         onSeaIsland: !!onSeaIsland,
         pirateHp: pirateTower ? pirateTower.hp : null,
-        corpse: corpse ? { x: corpse.x, y: corpse.y, bag: { ...corpse.bag } } : null,
+        corpse: null,
       };
       localStorage.setItem(SAVE_KEY, JSON.stringify(data));
       if (verbose) toast("据点已铭刻（存档）。", 2);
+      return true;
     } catch (err) {
       if (verbose) toast("存档失败。");
       console.warn(err);
+      return false;
     }
   }
 
@@ -10852,7 +10980,12 @@ function spawnPickup(x, y, kind) {
     if (!raw) { toast("没有存档。"); return false; }
     let data;
     try { data = JSON.parse(raw); } catch (e) { toast("存档损坏。"); return false; }
+    if (!validateSave(data)) {
+      toast("存档格式不受支持。", 3);
+      return false;
+    }
     resetRunState();
+    clearMoveTarget();
     seed = data.worldSeed || ((Date.now() % 99991) + 17);
     worldSeed = seed;
     Object.assign(inv, data.inv || {});
@@ -10871,54 +11004,81 @@ function spawnPickup(x, y, kind) {
       }
     }
     generate();
+    journey = data.journey ? {...newJourney(), ...data.journey, tutorial:{...newJourney().tutorial,...data.journey.tutorial}} : newJourney();
     // restore fires beyond the starter
     fires.length = 0;
-    if (data.fires && data.fires.length) {
-      for (const f of data.fires) fires.push({ x: f.x, y: f.y, lit: !!f.lit, fuel: f.fuel || 0 });
+    if (Array.isArray(data.fires)) {
+      for (const f of data.fires) fires.push({ x: f.x, y: f.y, lit: !!f.lit, fuel: f.fuel || 0, pit: !!f.pit, permanent: !!f.permanent, endo: !!f.endo });
     } else if (campfire) {
       fires.push(campfire);
     }
     syncPrimaryFire();
     // strip generated player-owned towers then restore
     for (let i = buildings.length - 1; i >= 0; i--) {
-      if (buildings[i].owned) buildings.splice(i, 1);
+      if (data.v < 3 && buildings[i].owned) buildings.splice(i, 1);
     }
-    for (const t of data.towers || []) spawnWatchtower(t.x, t.y);
-    // remove generated chests/fences near restore points? just add saved ones
-    for (const c of data.chests || []) spawnChest(c.x, c.y, c.store);
-    for (const f of data.fences || []) spawnFence(f.x, f.y, false);
-    for (const w of data.walls || []) spawnFence(w.x, w.y, true);
-    refreshFenceLinks();
+    if (data.v === 3 && data.worldChanges) {
+      restoreWorld(data.worldChanges);
+      for (const f of fires) f.building = buildings.find(b => b.firepit && b.x === f.x && b.y === f.y);
+    } else if (data.v >= 2 && Array.isArray(data.structures) && Array.isArray(data.ownedBuildings)) {
+      for (let i = props.length - 1; i >= 0; i--) {
+        if (SAVED_PROP_KINDS.has(props[i].kind)) props.splice(i, 1);
+      }
+      for (const p of data.structures) props.push(unpackStructure(p));
+      for (const b of data.ownedBuildings) buildings.push(unpackStructure(b));
+      for (const f of fires) {
+        f.building = buildings.find((b) => b.firepit && b.x === f.x && b.y === f.y);
+      }
+      refreshFenceLinks();
+    } else {
+      // Legacy saves include generated structures: replace those categories, don't append duplicates.
+      for (let i = props.length - 1; i >= 0; i--) {
+        if (["chest", "fence", "stonewall", "farm", "trap"].includes(props[i].kind)) props.splice(i, 1);
+      }
+      for (const t of data.towers || []) spawnWatchtower(t.x, t.y);
+      for (const c of data.chests || []) spawnChest(c.x, c.y, c.store);
+      for (const f of data.fences || []) spawnFence(f.x, f.y, false);
+      for (const w of data.walls || []) spawnFence(w.x, w.y, true);
+      refreshFenceLinks();
+      for (const f of data.farms || []) {
+        spawnFarmPlot(f.x, f.y);
+        const farm = props[props.length - 1];
+        if (farm && farm.kind === "farm") {
+          farm.planted = !!f.planted; farm.stage = f.stage || 0; farm.grow = f.grow || 0;
+        }
+      }
+      if (data.hives) {
+        // strip generated hives then restore
+        for (let i = props.length - 1; i >= 0; i--) if (props[i].kind === "beehive") props.splice(i, 1);
+        for (const h of data.hives) {
+          props.push({
+            kind: "beehive", x: h.x, y: h.y,
+            fw: 48, fh: 56, frames: 1, hp: 40, max: 40, solid: false, z: 0,
+            honeyLeft: h.honeyLeft != null ? h.honeyLeft : 3, anger: 0,
+          });
+        }
+      }
+      for (const t of data.traps || []) {
+        spawnTrap(t.x, t.y);
+        const trap = props[props.length - 1];
+        if (trap && trap.kind === "trap") {
+          trap.bait = t.bait || 0; trap.sprung = !!t.sprung;
+        }
+      }
+    }
     if (data.fog && data.fog.length === fog.length) {
       for (let i = 0; i < fog.length; i++) fog[i] = data.fog[i] ? 1 : 0;
       buildMinimap();
     }
-    for (const f of data.farms || []) {
-      spawnFarm(f.x, f.y);
-      const farm = props[props.length - 1];
-      if (farm && farm.kind === "farm") {
-        farm.planted = !!f.planted; farm.stage = f.stage || 0; farm.grow = f.grow || 0;
-      }
-    }
-    if (data.hives) {
-      // strip generated hives then restore
-      for (let i = props.length - 1; i >= 0; i--) if (props[i].kind === "beehive") props.splice(i, 1);
-      for (const h of data.hives) {
-        props.push({
-          kind: "beehive", x: h.x, y: h.y,
-          fw: 48, fh: 56, frames: 1, hp: 40, max: 40, solid: false, z: 0,
-          honeyLeft: h.honeyLeft != null ? h.honeyLeft : 3, anger: 0,
-        });
-      }
-    }
-    for (const t of data.traps || []) {
-      spawnTrap(t.x, t.y);
-      const trap = props[props.length - 1];
-      if (trap && trap.kind === "trap") {
-        trap.bait = t.bait || 0; trap.sprung = !!t.sprung;
-      }
-    }
+    toolDur = data.toolDur || toolDur;
+    wetness = data.wetness || wetness;
+    houndClock = data.houndClock || houndClock;
+    seasonBossFlags = data.seasonBossFlags || {};
+    cookJob = data.cookJob || null;
+    roastJob = data.roastJob || null;
+    cookSlots = data.cookSlots || [null, null, null, null];
     if (player && data.player) {
+      applyCharacter(data.player.charId || "wilson");
       player.x = data.player.x; player.y = data.player.y;
       player.hp = data.player.hp; player.mp = data.player.mp;
       player.hunger = data.player.hunger; player.corr = data.player.corr;
@@ -10948,7 +11108,7 @@ function spawnPickup(x, y, kind) {
         pirateTower = null;
       }
     }
-    if (data.corpse && data.corpse.bag) {
+    if (data.v < 3 && data.corpse && data.corpse.bag) {
       corpse = {
         kind: "corpse", x: data.corpse.x, y: data.corpse.y,
         fw: 48, fh: 32, frames: 1, hp: 999, solid: false,
@@ -10973,6 +11133,7 @@ function spawnPickup(x, y, kind) {
 
   function update(dt) {
     time += dt;
+    if (window.KCUI.isOpen) return;
     if (state === STATE.MENU) {
       if (mouse.leftClick) {
         if (window.DstAudio) window.DstAudio.unlock();
@@ -11000,7 +11161,17 @@ function spawnPickup(x, y, kind) {
       return;
     }
     if (state === STATE.PAUSE) {
-      if (mouse.leftClick) state = STATE.PLAY;
+      if (mouse.leftClick) {
+        const hits = drawPauseMenu._hits || [];
+        let hit = null;
+        for (const h of hits) {
+          if (mouse.x >= h.x && mouse.x <= h.x + h.w && mouse.y >= h.y && mouse.y <= h.y + h.h) {
+            hit = h; break;
+          }
+        }
+        if (!hit || hit.id === "resume") state = STATE.PLAY;
+        else if (hit.id === "menu") returnToMainMenu();
+      }
       return;
     }
     if (state === STATE.DEAD) {
@@ -11075,9 +11246,10 @@ function spawnPickup(x, y, kind) {
     drawDropsAndProj();
     drawOverlays();
     drawHUD();
-    if (state === STATE.PAUSE) drawPauseLike("暂停", "元素仍在岛上燃烧与冻结。点击画面继续。", "点击继续");
+    drawActionTarget();
+    if (state === STATE.PAUSE) drawPauseMenu();
     if (state === STATE.DEAD) drawPauseLike("陨落", "物资落在倒下之处。点击后在营火旁重生，去取回遗物。", "营火重生");
-    if (state === STATE.WIN) drawPauseLike("僭主已死", "红旗倒下。你在魔蚀与饥饿之间活了下来，这座岛暂时承认了你的据点。", "再玩一局");
+    if (state === STATE.WIN) drawPauseLike("KC KEEP 重建完成", "三级据点屹立，红堡僭主已败。远征完成！可从主菜单继续探索你的世界。", "返回主菜单");
   }
 
   function drawCursor() {
@@ -11093,6 +11265,8 @@ function spawnPickup(x, y, kind) {
     try {
       update(dt);
       render();
+      const step = tutorialSteps().find(s => !s.done);
+      window.KCUI.update(step ? step.text : '', state === STATE.PLAY);
     } catch (err) {
       console.error("frame", err);
       if (!loop._errToast || time - loop._errToast > 3) {
@@ -11106,8 +11280,13 @@ function spawnPickup(x, y, kind) {
   }
 
   window.addEventListener("resize", resize);
-  window.addEventListener("keydown", (e) => {
-    keys.add(e.code);
+  window.addEventListener("keydown", (event) => {
+    if(window.KCUI.isOpen || event.target.closest?.('#kc-toolbar, #kc-panel')) return;
+    const code = state === STATE.PLAY ? window.KCUI.mapped(event.code) : event.code;
+    const e = {code, preventDefault:()=>event.preventDefault()};
+    keys.add(code);
+    if(state === STATE.PLAY && !craftOpen && !cookOpen && !bagOpen && !chestOpen && !event.repeat && code === 'KeyB'){useBucket();return;}
+    if(state === STATE.PLAY && !craftOpen && !cookOpen && !bagOpen && !chestOpen && !event.repeat && code === 'KeyV'){makeFirebreak();return;}
     if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
     if (state === STATE.CODEX) {
       const groups = codexEntries();
@@ -11178,7 +11357,9 @@ function spawnPickup(x, y, kind) {
         else if (chestOpen) chestOpen = null;
         else state = STATE.PAUSE;
       }
-    } else if (state === STATE.PAUSE && e.code === "Escape") state = STATE.PLAY;
+    } else if (state === STATE.PAUSE && e.code === "Escape") {
+      returnToMainMenu();
+    }
     if (state === STATE.MENU && (e.code === "Enter" || e.code === "Space")) beginGame();
     if (state === STATE.CHAR && (e.code === "Enter" || e.code === "Space")) startWithCharacter(charPick || "wilson");
     if (state === STATE.CHAR && e.code === "Digit1") startWithCharacter("wilson");
@@ -11188,7 +11369,8 @@ function spawnPickup(x, y, kind) {
     if (state === STATE.CHAR && e.code === "Digit5") startWithCharacter("wendy");
     if (state === STATE.CHAR && e.code === "Digit6") startWithCharacter("woodie");
   });
-  window.addEventListener("keyup", (e) => keys.delete(e.code));
+  window.addEventListener("keyup", (e) => {keys.delete(e.code);keys.delete(window.KCUI.mapped(e.code));});
+  window.addEventListener("blur", () => {keys.clear();mouse.left=false;mouse.right=false;clearMoveTarget();});
   let codexWheelAcc = 0;
   window.addEventListener("wheel", (e) => {
     if (state !== STATE.CODEX) return;
@@ -11270,6 +11452,14 @@ function spawnPickup(x, y, kind) {
       return true;
     }
     if (state === STATE.PAUSE) {
+      const hits = drawPauseMenu._hits || [];
+      for (const h of hits) {
+        if (mouse.x >= h.x && mouse.x <= h.x + h.w && mouse.y >= h.y && mouse.y <= h.y + h.h) {
+          if (h.id === "menu") returnToMainMenu();
+          else state = STATE.PLAY;
+          return true;
+        }
+      }
       state = STATE.PLAY;
       return true;
     }
@@ -11279,8 +11469,9 @@ function spawnPickup(x, y, kind) {
     }
     return false;
   }
-  window.addEventListener("mousemove", (e) => { setMouseFromEvent(e); });
+  window.addEventListener("mousemove", (e) => { if(!window.KCUI.isOpen && e.target===canvas)setMouseFromEvent(e); });
   window.addEventListener("mousedown", (e) => {
+    if(window.KCUI.isOpen || e.target !== canvas) return;
     setMouseFromEvent(e);
     if (e.button === 0) {
       mouse.left = true;
@@ -11297,6 +11488,7 @@ function spawnPickup(x, y, kind) {
     }
   });
   window.addEventListener("mouseup", (e) => {
+    if(window.KCUI.isOpen || e.target !== canvas) {mouse.left=false;mouse.right=false;return;}
     setMouseFromEvent(e);
     if (e.button === 0) {
       mouse.left = false;
@@ -11323,6 +11515,232 @@ function spawnPickup(x, y, kind) {
     e.preventDefault();
   }, { passive: false });
 
+  function newJourney() {
+    return { keepLevel: 0, tutorial: {wood:false,food:false,fuel:false,night:false,dawn:false}, victory:false };
+  }
+
+  function captureWorldBaseline() {
+    worldBaseline = {
+      props: window.KCSurvival.capture(props, packStructure),
+      buildings: window.KCSurvival.capture(buildings, packStructure),
+      tiles: Array.from(world.tiles), biomes: Array.from(biomes || []),
+    };
+    entities.forEach((e,i) => { e.persistId = i; });
+    defeatedEntities = new Set();
+    fireSystem = window.KCSurvival.createFire(world, COLS, ROWS, rand);
+  }
+
+  function snapshotWorld() {
+    if (!worldBaseline) return null;
+    const terrain = [];
+    for(let i=0;i<world.tiles.length;i++) {
+      if(world.tiles[i]!==worldBaseline.tiles[i] || (biomes && biomes[i]!==worldBaseline.biomes[i]) || world.wet[i]>1.21 || world.iceAge[i]>0) {
+        terrain.push([i,world.tiles[i],biomes?biomes[i]:0,world.wet[i],world.iceAge[i]]);
+      }
+    }
+    return {
+      props:window.KCSurvival.diff(props,worldBaseline.props,packStructure),
+      buildings:window.KCSurvival.diff(buildings,worldBaseline.buildings,packStructure),
+      terrain, defeated:Array.from(defeatedEntities), drops:drops.map(d=>({...d})),
+      fires:fireSystem.snapshot(),
+    };
+  }
+
+  function restoreWorld(snapshot) {
+    window.KCSurvival.restore(props,snapshot.props,unpackStructure);
+    window.KCSurvival.restore(buildings,snapshot.buildings,unpackStructure);
+    for(const [i,t,b,wet,ice] of snapshot.terrain) {
+      world.tiles[i]=t;if(biomes)biomes[i]=b;world.wet[i]=wet;world.iceAge[i]=ice;
+    }
+    defeatedEntities=new Set(snapshot.defeated);
+    for(const e of entities) if(defeatedEntities.has(e.persistId)){e.dead=true;e.hp=0;}
+    drops.splice(0,drops.length,...snapshot.drops);
+    fireSystem.restore(snapshot.fires);
+    corpse=props.find(p=>p.kind==='corpse')||null;
+    if(pirateTower && !buildings.includes(pirateTower))pirateTower=null;
+    refreshFenceLinks();buildMinimap();
+  }
+
+  function useBucket() {
+    if(!inv.bucket){toast('先在远征手册制作水桶：木材 3、石头 2。');return;}
+    if(!(inv.bucketWater>0)) {
+      const c=Math.floor(player.x/TILE),r=Math.floor(player.y/TILE);
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++) {
+        if(inb(c+dx,r+dy)&&world.tiles[idx(c+dx,r+dy)]===T_WATER){inv.bucketWater=3;toast('装满水桶：可泼水 3 次。');return;}
+      }
+      toast('水桶空了，靠近岸边再装水。');return;
+    }
+    if(dist(player.x,player.y,mouse.wx,mouse.wy)>160){toast('太远了：水桶范围 160。');return;}
+    const c=Math.floor(mouse.wx/TILE),r=Math.floor(mouse.wy/TILE);
+    if(!inb(c,r)){toast('这里无法泼水。');return;}
+    fireSystem.extinguish(c,r,1);inv.bucketWater--;
+    if(smolderJob&&Math.abs(smolderJob.c-c)<=1&&Math.abs(smolderJob.r-r)<=1)smolderJob=null;
+    burst(mouse.wx,mouse.wy,'splash');toast('火已扑灭，湿地暂时不会复燃。剩余 '+inv.bucketWater+' 次。');
+  }
+
+  function makeFirebreak() {
+    const c=Math.floor(mouse.wx/TILE),r=Math.floor(mouse.wy/TILE);
+    if(!inb(c,r)||dist(player.x,player.y,mouse.wx,mouse.wy)>120){toast('太远了：靠近要铺设的地面。');return;}
+    if(![T_GRASS,T_MAGIC].includes(world.tiles[idx(c,r)])){toast('只能在草地上铺防火带。');return;}
+    if(!(inv.rocks>=1)){toast('铺设防火带需要 1 石头。');return;}
+    inv.rocks--;fireSystem.extinguish(c,r,0);world.tiles[idx(c,r)]=T_ASH;buildMinimap();toast('已铺设防火带，火焰无法穿过这一格。');
+  }
+
+  const KEEP_UPGRADES = [
+    {name:'修复营地',cost:{wood:12,rocks:6},benefit:'营地附近缓慢恢复生命；最大生命 +15'},
+    {name:'强化据点',cost:{wood:20,gold:6},quest:['explore','cave','island'],benefit:'营地恢复加快；最大生命累计 +30'},
+    {name:'重建 KC KEEP',cost:{boards:6,cutstone:4,gold:10},quest:['bear','troll','mino','batqueen'],benefit:'营地恢复进一步加快；最大生命累计 +45'},
+  ];
+  const resourceNames={wood:'木材',rocks:'石头',gold:'金子',boards:'木板',cutstone:'石砖'};
+  function keepRequirement() {
+    const next=KEEP_UPGRADES[journey.keepLevel];
+    if(!next)return '据点已完成。击败北方红堡僭主，完成远征。';
+    const cost=Object.entries(next.cost).map(([k,n])=>resourceNames[k]+' '+(inv[k]||0)+'/'+n).join(' · ');
+    return next.name+'：'+cost+'。'+next.benefit+(journey.keepLevel===1?'。还需探索荒野、洞穴或离岛。':journey.keepLevel===2?'。还需击败熊王、巨魔、牛头人或蝠后之一。':'');
+  }
+  function canUpgradeKeep() {
+    if(!player||player.dead||![STATE.PLAY,STATE.PAUSE].includes(state)||!landmarks.camp)return false;
+    const next=KEEP_UPGRADES[journey.keepLevel];if(!next)return false;
+    return dist(player.x,player.y,landmarks.camp.c*TILE,landmarks.camp.r*TILE)<300
+      && Object.entries(next.cost).every(([k,n])=>(inv[k]||0)>=n)
+      && (!next.quest||quests.some(q=>next.quest.includes(q.id)&&q.done));
+  }
+  function upgradeKeep() {
+    if(!canUpgradeKeep())return '请回到初始营地，并满足材料与探索条件。';
+    const next=KEEP_UPGRADES[journey.keepLevel];
+    for(const [k,n] of Object.entries(next.cost))inv[k]-=n;
+    journey.keepLevel++;player.maxHp+=15;player.hp=Math.min(player.maxHp,player.hp+15);
+    saveGame(false);return next.name+'完成！'+next.benefit;
+  }
+  function updateJourney(dt) {
+    if(!player||player.dead)return;
+    const t=journey.tutorial;
+    if(inv.wood>=3)t.wood=true;
+    if(inv.berries>0||inv.cooked>0||inv.meat>2||inv.fish>0)t.food=true;
+    if(isNight())t.night=true;
+    if(t.night&&!isNight())t.dawn=true;
+    if(journey.keepLevel>0&&dist(player.x,player.y,landmarks.camp.c*TILE,landmarks.camp.r*TILE)<160) {
+      player.hp=Math.min(player.maxHp,player.hp+dt*journey.keepLevel*0.6);
+    }
+    if(journey.keepLevel===3&&quests.some(q=>q.id==='warlord'&&q.done)&&!journey.victory){
+      journey.victory=true;saveGame(false);player._winTimer=1.4;
+    }
+  }
+  function tutorialSteps() {
+    const label=code=>window.KCUI.label(code);
+    return [
+      {done:journey.tutorial.wood,text:'收集 3 木材：靠近树木，按 '+label('KeyF')+' 采集。'},
+      {done:journey.tutorial.food,text:'采集浆果或获得食物；按 '+label('KeyR')+' 进食。'},
+      {done:journey.tutorial.fuel,text:'给营火添一次柴：靠近营火，按 '+label('Space')+'。'},
+      {done:journey.tutorial.dawn,text:'守住第一夜：夜晚待在火旁，保持饱食，等待黎明。'},
+    ];
+  }
+  function describeJourney() {
+    return {
+      goal:player?'据点等级 '+journey.keepLevel+'/3。最终目标：重建据点并击败北方红堡僭主。':'开始或继续旅程后可以升级据点。',
+      upgrade:keepRequirement()+' 升级需要人在初始营地附近。',canUpgrade:canUpgradeKeep(),
+      bucket:inv.bucket?'已拥有水桶 · 剩余 '+(inv.bucketWater||0)+' 次泼水。':'水桶可以装水扑灭一小片火焰。',
+      canBucket:!!player&&[STATE.PLAY,STATE.PAUSE].includes(state)&&!inv.bucket&&(inv.wood||0)>=3&&(inv.rocks||0)>=2,
+      objectives:[...tutorialSteps(),...quests.map(q=>({done:q.done,text:q.title+'：'+q.desc}))],
+    };
+  }
+  function drawActionTarget() {
+    if(state!==STATE.PLAY||craftOpen||cookOpen||bagOpen||chestOpen||window.KCUI.isOpen)return;
+    const act=resolveCursorPrimary();if(!act.target)return;
+    const h=act.type==='attack'?actorHit(act.target):propHit(act.target);
+    const far=dist(player.x,player.y,h.x,h.y)>72+h.r*0.35;
+    ctx.save();ctx.strokeStyle=far?'#e9ad58':'#b3f0a1';ctx.lineWidth=2;
+    ctx.beginPath();ctx.ellipse(act.target.x-camera.x,act.target.y-camera.y,Math.max(18,h.r*.7),10,0,0,Math.PI*2);ctx.stroke();
+    ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.fillStyle=far?'#ffe0a4':'#d5ffbd';
+    ctx.fillText(far?'靠近后'+act.label:act.label,act.target.x-camera.x,act.target.y-camera.y+25);ctx.restore();
+  }
+
+  function validateSave(data) {
+    if(!data||![1,2,3].includes(data.v)||!Number.isFinite(data.worldSeed)||!data.player)return false;
+    for(const k of ['x','y','hp','mp','hunger','corr'])if(!Number.isFinite(data.player[k]))return false;
+    if(Math.abs(data.player.x)>WORLD_SIZE.cols*TILE*2||Math.abs(data.player.y)>WORLD_SIZE.rows*TILE*2)return false;
+    const unsafe=(v,depth=0)=>{
+      if(depth>30)return true;
+      if(v&&typeof v==='object')return Object.entries(v).some(([k,x])=>['__proto__','prototype','constructor'].includes(k)||unsafe(x,depth+1));
+      return typeof v==='number'&&!Number.isFinite(v);
+    };
+    if(unsafe(data))return false;
+    const record = value => value && typeof value === 'object' && !Array.isArray(value);
+    const point = value => record(value) && Number.isFinite(value.x) && Number.isFinite(value.y);
+    for (const key of ['inv','runes','toolDur','wetness','houndClock','seasonBossFlags','journey']) {
+      if (data[key] != null && !record(data[key])) return false;
+    }
+    if (data.inv && Object.entries(data.inv).some(([k,v]) => k === '_spoil' ? !record(v) : !Number.isFinite(v))) return false;
+    if (data.player.tech != null && !record(data.player.tech)) return false;
+    for (const key of ['overworldReturn','cavePlayer','corpse']) if(data[key] != null && !point(data[key])) return false;
+    for (const key of ['dayT','seasonT','rain','rainTimer']) if(data[key]!=null&&!Number.isFinite(data[key]))return false;
+    if (data.cookSlots != null && (!Array.isArray(data.cookSlots)||data.cookSlots.length!==4||data.cookSlots.some(v=>v!=null&&typeof v!=='string')))return false;
+    for (const key of ['cookJob','roastJob']) if(data[key]!=null&&(!record(data[key])||!Number.isFinite(data[key].t)||!Number.isFinite(data[key].need)))return false;
+    if (data.toolDur && Object.values(data.toolDur).some(v=>!record(v)||!Number.isFinite(v.max)||!Number.isFinite(v.uses)))return false;
+    if (data.journey && data.journey.tutorial != null && !record(data.journey.tutorial))return false;
+    if(data.inv&&Object.values(data.inv).some(v=>typeof v==='number'&&(v<0||v>1e8)))return false;
+    for(const key of ['fires','chests','fences','walls','farms','hives','traps','towers','structures','ownedBuildings','quests','fog'])if(data[key]!=null&&!Array.isArray(data[key]))return false;
+    for (const key of ['fires','chests','fences','walls','farms','hives','traps','towers','structures','ownedBuildings']) {
+      if(data[key] && data[key].some(p=>!point(p)))return false;
+    }
+    if(data.fires && data.fires.some(f=>!Number.isFinite(f.fuel)))return false;
+    if(data.quests && data.quests.some(q=>!record(q)||typeof q.id!=='string'))return false;
+    if(data.v>=2&&(!Array.isArray(data.structures)||!Array.isArray(data.ownedBuildings)))return false;
+    if(data.journey&&(!Number.isInteger(data.journey.keepLevel)||data.journey.keepLevel<0||data.journey.keepLevel>3))return false;
+    if(data.v===3){
+      const w=data.worldChanges;if(!w)return false;
+      for(const kind of ['props','buildings']){
+        if(!w[kind]||!['removed','changed','added'].every(k=>Array.isArray(w[kind][k])))return false;
+        if(w[kind].removed.some(n=>!Number.isInteger(n)||n<0))return false;
+        if(w[kind].changed.some(p=>!p||!Number.isInteger(p.persistId)||p.persistId<0))return false;
+        if([...w[kind].changed,...w[kind].added].some(p=>p && (p.imageKey!=null&&typeof p.imageKey!=='string')))return false;
+        if([...w[kind].changed,...w[kind].added].some(p=>p && p.imageRefs!=null && (!record(p.imageRefs)||Object.values(p.imageRefs).some(key=>typeof key!=='string'))))return false;
+        if([...w[kind].changed,...w[kind].added].some(p=>!p||typeof p.kind!=='string'||!Number.isFinite(p.x)||!Number.isFinite(p.y)))return false;
+      }
+      if(!['terrain','defeated','drops','fires'].every(k=>Array.isArray(w[k])))return false;
+      if(w.terrain.some(t=>!Array.isArray(t)||t.length!==5||!t.every(Number.isFinite)||!Number.isInteger(t[0])||t[0]<0||t[0]>=WORLD_SIZE.cols*WORLD_SIZE.rows||![0,1,2,3,4].includes(t[1])))return false;
+      const tileIndex=n=>Number.isInteger(n)&&n>=0&&n<WORLD_SIZE.cols*WORLD_SIZE.rows;
+      if(w.fires.some(f=>!Array.isArray(f)||f.length!==4||!f.every(Number.isFinite)||!tileIndex(f[0])||!tileIndex(f[3])||f[2]<0||f[2]>4.8))return false;
+      if(w.defeated.some(id=>!Number.isInteger(id)||id<0))return false;
+      if(w.drops.some(d=>!point(d)||typeof d.kind!=='string'))return false;
+    }
+    return true;
+  }
+
+  function importSaveText(text, preserveBackup=true) {
+    let data;try{data=JSON.parse(text);}catch(e){return '文件不是有效的 JSON 存档。';}
+    if(!validateSave(data))return '存档格式无效或版本不受支持；当前旅程未更改。';
+    const previousState=state;
+    let old=null, replaced=false;
+    try {
+      // Checkpoint the live run before importing, including progress since autosave.
+      if(preserveBackup && player && [STATE.PLAY,STATE.PAUSE].includes(state) && !saveGame(false)) {
+        return '无法备份当前旅程，导入已取消。请先导出存档或检查存储空间。';
+      }
+      old=localStorage.getItem(SAVE_KEY);
+      if(preserveBackup&&old)localStorage.setItem(SAVE_KEY+'-backup',old);
+      localStorage.setItem(SAVE_KEY,JSON.stringify(data));replaced=true;
+      if(!loadGame())throw new Error('无法载入存档');
+      panelPreviousState=STATE.PLAY;state=STATE.PAUSE;return '导入成功。关闭面板即可继续旅程。';
+    } catch(e) {
+      if(replaced){
+        try {if(old){localStorage.setItem(SAVE_KEY,old);loadGame();}else localStorage.removeItem(SAVE_KEY);}
+        catch(restoreError){state=previousState;return '导入失败。原旅程已保留在导入前的备份中，请恢复备份。';}
+      }
+      state=previousState;return '导入失败，原存档未被替换：'+e.message;
+    }
+  }
+
+  window.KCUI.init({
+    canOpen:()=>[STATE.MENU,STATE.PLAY,STATE.PAUSE].includes(state),
+    open:()=>{panelPreviousState=state;if(state===STATE.PLAY)state=STATE.PAUSE;keys.clear();mouse.left=false;mouse.right=false;mouse.leftClick=false;mouse.rightClick=false;lmbDrag=false;clearMoveTarget();},
+    close:()=>{state=panelPreviousState;keys.clear();},
+    describe:describeJourney,upgrade:upgradeKeep,
+    craftBucket:()=>{if(!player||![STATE.PLAY,STATE.PAUSE].includes(state)||inv.bucket||(inv.wood||0)<3||(inv.rocks||0)<2)return '材料不足或已拥有水桶。';inv.wood-=3;inv.rocks-=2;inv.bucket=1;inv.bucketWater=0;return '水桶制作完成。靠近水边按 '+window.KCUI.label('KeyB')+' 装水。';},
+    exportSave:()=>{if((state===STATE.PLAY||state===STATE.PAUSE)&&player&&!saveGame(true))return null;return localStorage.getItem(SAVE_KEY);},
+    importSave:importSaveText,
+    restoreBackup:()=>{const text=localStorage.getItem(SAVE_KEY+'-backup');return text?importSaveText(text,false):'没有导入前的备份。';},
+  });
   resize();
   window.__game = {
     get state() { return state; },

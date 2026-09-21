@@ -48,3 +48,7 @@ python3 -m http.server 8765 --bind 127.0.0.1
 游戏代码见 [LICENSE](LICENSE)。
 
 美术资源版权归属原作者，**不包含在 `main` 中**。使用与署名要求见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+
+## 最新本地更新
+
+v90.1 加入消防工具、第一夜引导、据点进阶、世界变化存档和设置/备份面板。操作与验证方法见 [本地说明](game/README.md)。部署前线上版本保持原样。

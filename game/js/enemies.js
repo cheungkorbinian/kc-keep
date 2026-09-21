@@ -72,10 +72,12 @@
       hp: 12, speed: 150, aggro: 200, dmg: 3, r: 10,
       fw: 192, fh: 192,
       idleFrames: 6, runFrames: 4, atkFrames: 7,
+      // No crow sheet in pack — reuse bat silhouette with dark recolor
       idle: EP + "/Giant Bat/Giant Bat_Idle.png",
       run: EP + "/Giant Bat/Giant Bat_Move.png",
       atk: EP + "/Giant Bat/Giant Bat_Attack.png",
       avatar: EP + "/Giant Bat/Giant Bat_Avatar.png",
+      filter: "grayscale(0.9) brightness(0.45) contrast(1.35) saturate(0.2)",
     },
     bat_queen: {
       name: "蝠后",
@@ -87,6 +89,7 @@
       run: EP + "/Giant Bat/Giant Bat_Move.png",
       atk: EP + "/Giant Bat/Giant Bat_Attack.png",
       avatar: EP + "/Giant Bat/Giant Bat_Avatar.png",
+      filter: "hue-rotate(275deg) saturate(1.7) brightness(1.05)",
     },
     bear: {
       name: "荒原熊",
@@ -219,10 +222,12 @@
       hp: 22, speed: 110, aggro: 380, dmg: 8, r: 11,
       fw: 192, fh: 192,
       idleFrames: 7, runFrames: 6, atkFrames: 9,
+      // No frog sheet — lizard pose with marsh-green recolor vs plain lizard
       idle: EP + "/Lizard/Lizard_Idle.png",
       run: EP + "/Lizard/Lizard_Run.png",
       atk: EP + "/Lizard/Lizard_Attack.png",
       avatar: EP + "/Lizard/Lizard_Avatar.png",
+      filter: "hue-rotate(95deg) saturate(1.55) brightness(1.08)",
     },
     // —— Tiny Swords Enemy Pack fauna ——
     turtle: {
@@ -298,11 +303,12 @@
       role: "bomber",
       hp: 42, speed: 88, aggro: 540, dmg: 12, r: 14,
       fw: 192, fh: 192,
-      idleFrames: 8, runFrames: 6, atkFrames: 8,
-      idle: EP + "/Torch Goblin/Torch Goblin_Idle.png",
-      run: EP + "/Torch Goblin/Torch Goblin_Run.png",
-      atk: EP + "/Torch Goblin/Torch Goblin_Attack.png",
-      avatar: EP + "/Torch Goblin/Torch Goblin_Avatar.png",
+      idleFrames: 7, runFrames: 6, atkFrames: 6,
+      // Distinct from torch goblin — Update 010 TNT troop sheet
+      idle: U010 + "/Goblins/Troops/TNT/Red/TNT_Red.png",
+      run: U010 + "/Goblins/Troops/TNT/Red/TNT_Red.png",
+      atk: U010 + "/Goblins/Troops/TNT/Red/TNT_Red.png",
+      avatar: U010 + "/Goblins/Troops/TNT/Red/TNT_Red.png",
       ranged: "bomb",
     },
     pig_rider: {

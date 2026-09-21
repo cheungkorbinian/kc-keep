@@ -4,6 +4,7 @@
 (function (global) {
   "use strict";
   let ctx = null;
+  let volume = 0.7;
   function ac() {
     if (!ctx) {
       const AC = global.AudioContext || global.webkitAudioContext;
@@ -14,13 +15,14 @@
     return ctx;
   }
   function beep(freq, dur, type, vol) {
+    if (volume <= 0) return;
     const c = ac();
     if (!c) return;
     const o = c.createOscillator();
     const g = c.createGain();
     o.type = type || "square";
     o.frequency.value = freq;
-    g.gain.value = vol == null ? 0.04 : vol;
+    g.gain.value = (vol == null ? 0.04 : vol) * volume;
     o.connect(g); g.connect(c.destination);
     o.start();
     g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
@@ -34,6 +36,7 @@
     });
   }
   global.DstAudio = {
+    setVolume(value) { volume = Math.max(0, Math.min(1, Number(value) || 0)); },
     unlock() { ac(); },
     craft() { beep(520, 0.08); setTimeout(() => beep(680, 0.1), 70); },
     eat() { beep(180, 0.12, "triangle", 0.05); },
