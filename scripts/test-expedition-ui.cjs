@@ -4,8 +4,9 @@ function element(){return {textContent:'',hidden:false,open:false,value:'',check
 function get(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);}
 const c={console,document:{getElementById:get,createElement:element,activeElement:null},localStorage:{getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v)},DstAudio:{setVolume:v=>volume=v},setTimeout:()=>{}};c.window=c;
 vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../game/js/expedition-ui.js'),'utf8'),c);
-c.KCUI.init({canOpen:()=>true,open:()=>paused=true,close:()=>paused=false,describe:()=>({goal:'Goal',upgrade:'Upgrade',canUpgrade:false,canBucket:false,bucket:'Bucket',objectives:[]})});
+c.KCUI.init({canOpen:()=>true,open:()=>paused=true,close:()=>paused=false,describe:()=>({goal:'Goal',forecast:90,upgrade:'Upgrade',canUpgrade:false,canBucket:false,bucket:'Bucket',objectives:[]}),saveStatus:()=>({auto:'今日 12:00',manual:'尚无存档'}),saveManual:()=> '手动保存成功',restoreManual:()=> '手动读取成功'});
 get('kc-open-settings').onclick();assert(paused);assert(get('kc-panel').open);
+assert.match(get('kc-save-times').textContent,/今日 12:00/);assert.match(get('kc-forecast').textContent,/冬季/);get('kc-save-manual').onclick();assert.match(get('kc-status').textContent,/手动保存成功/);get('kc-load-manual').onclick();assert.match(get('kc-status').textContent,/勾选/);get('kc-import-confirm').checked=true;get('kc-load-manual').onclick();assert.match(get('kc-status').textContent,/手动读取成功/);
 function bind(i,code){get('kc-bindings').children[i].children[0].onclick();get('kc-panel').handlers.keydown({code,preventDefault(){},stopPropagation(){}});}
 bind(5,'KeyG');assert.equal(c.KCUI.mapped('KeyG'),'KeyF');assert.equal(c.KCUI.mapped('KeyF'),'Unbound');
 bind(6,'KeyG');assert.equal(c.KCUI.mapped('KeyG'),'KeyJ');assert.equal(c.KCUI.mapped('KeyJ'),'KeyF');

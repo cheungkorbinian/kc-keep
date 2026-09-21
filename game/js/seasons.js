@@ -78,5 +78,18 @@
     return Math.max(0, Math.min(100, t));
   }
 
-  global.SeasonSys = { SEASONS, SEASON_LEN, seasonAt, comfortTarget };
+  function approachTemperature(current, target, dt, insulated) {
+    const cooling = target < current;
+    const rate = cooling ? (insulated ? 0.014 : 0.025) : 0.16;
+    return current + (target - current) * (1 - Math.exp(-Math.max(0, dt) * rate));
+  }
+
+  function secondsUntilWinter(seasonT) {
+    const cycle = SEASON_LEN * SEASONS.length;
+    const position = ((seasonT % cycle) + cycle) % cycle;
+    const start = SEASON_LEN * 3;
+    return position < start ? start - position : 0;
+  }
+
+  global.SeasonSys = { SEASONS, SEASON_LEN, seasonAt, comfortTarget, approachTemperature, secondsUntilWinter };
 })(window);

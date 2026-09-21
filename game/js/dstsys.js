@@ -46,13 +46,9 @@
   ];
 
   function clampInv(inv, toast) {
-    for (const [k, cap] of Object.entries(STACK)) {
-      const n = inv[k] || 0;
-      if (n > cap) {
-        inv[k] = cap;
-        if (toast) toast(k + " 堆叠已满（上限 " + cap + "）。", 2);
-      }
-    }
+    // Inventory stores totals. STACK limits each displayed stack, not total ownership.
+    // The paged bag splits these totals without destroying surplus rewards or loot.
+    return inv;
   }
 
   function ensureSpoil(inv) {

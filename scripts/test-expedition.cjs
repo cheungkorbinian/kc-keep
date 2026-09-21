@@ -14,7 +14,8 @@ const c=vm.createContext(sandbox);
 for(const file of ['worldgen.js','enemies.js','seasons.js','dstsys.js','survival.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),c,{filename:file});
 let src=fs.readFileSync(path.join(root,'game.js'),'utf8');
 src=src.slice(0,src.indexOf('  loadAll().then'))+'})();';
-src=src.replace('  resize();\n  window.__game',`  window.testAPI={saveGame,loadGame,snapshotWorld,validateSave,importSaveText,updateTiles,updateJourney,tryHarvest,tryInteract,useBucket,makeFirebreak,upgradeKeep,canUpgradeKeep,castSpell,updateProjectiles,kill,resetRunState,returnToMainMenu,
+src=src.replace('  resize();\n  window.__game',`  window.testAPI={recoverableCorpses,nearbyPriorityAction,inventorySlots,roomForItem,reconcileInventoryGains,tryPickupOne,spawnPickup,saveManualSlot,updateRoastJob,drawBagUI,setBagPage:v=>bagPage=v,dropCorpse,respawnAtCamp,lootCorpse,doActionNearby,doPrimaryAction,gainItem,bagItems,toggleForm,syncPrimaryFire,keys,get drops(){return drops;},get roastJob(){return roastJob;},saveGame,loadGame,snapshotWorld,validateSave,importSaveText,updateTiles,updateJourney,tryHarvest,tryInteract,useBucket,makeFirebreak,upgradeKeep,canUpgradeKeep,castSpell,updateProjectiles,kill,resetRunState,returnToMainMenu,
+  hurt,recordDeath,updateQuests,grantQuestRewards,drawFullMap,setWaypointAt,updateEntities,
   get journey(){return journey;},get props(){return props;},get buildings(){return buildings;},get entities(){return entities;},get fires(){return fires;},get state(){return state;},get player(){return player;},get world(){return world;},get inv(){return inv;},get quests(){return quests;},get fireSystem(){return fireSystem;},get mouse(){return mouse;},get worldSeed(){return worldSeed;},get fog(){return fog;},get toolDur(){return toolDur;},get saveKey(){return SAVE_KEY;},setRain:v=>rain=v,setDay:v=>dayT=v,setState:v=>state=v};
   resize();\n  window.__game`);
 vm.runInContext(src,c,{filename:'game.js'});
@@ -138,5 +139,111 @@ test('exit saves from pause and retains the run on storage failure',()=>{
   const original=c.localStorage.setItem;c.localStorage.setItem=()=>{throw new Error('simulated quota');};
   const oldConsole=c.console;c.console={...console,warn:noop};t.setState(3);t.returnToMainMenu();assert.equal(t.state,3);
   c.console=oldConsole;c.localStorage.setItem=original;
+});
+test('respawn returns to the original spawn despite a distant primary fire',()=>{
+  g.startWithCharacter('wilson');const x=t.player.x,y=t.player.y;
+  t.player.x+=1500;t.player.y+=1500;
+  t.fires.push({x:t.player.x,y:t.player.y,lit:true,fuel:80});t.syncPrimaryFire();
+  t.dropCorpse();t.respawnAtCamp();assert.equal(t.player.x,x);assert.equal(t.player.y,y);
+});
+test('inventory surplus survives gain, clamp, save and reload with paged stacks',()=>{
+  t.inv.wood=40;t.gainItem('wood',9);c.DstSys.clampInv(t.inv);assert.equal(t.inv.wood,49);
+  for(const k of Object.keys(c.DstSys.STACK)) t.inv[k]=100;
+  const pages=t.bagItems().pages;assert(pages>1);t.setBagPage(pages-1);assert(t.bagItems().some(Boolean));t.drawBagUI();t.setBagPage(0);assert(t.saveGame(false));assert(t.loadGame());assert.equal(t.inv.wood,100);
+});
+test('older remains are looted explicitly and resources cannot steal Space or F',()=>{
+  for(const key of Object.keys(t.inv))if(typeof t.inv[key]==='number')t.inv[key]=0;
+  t.props.splice(0);t.fires.splice(0);t.player.x=0;t.player.y=0;t.inv.wood=7;t.inv.gold=0;t.dropCorpse();
+  const first=t.props[0];t.player.x=500;t.inv.gold=8;t.dropCorpse();const second=t.props[1];
+  t.player.x=0;t.props.push({kind:'tree',x:1,y:0,hp:5});t.doActionNearby({harvestOnly:true});
+  assert.equal(t.inv.wood,7);assert(!t.props.includes(first));assert(t.props.includes(second));
+  t.player.x=500;t.doPrimaryAction({type:'interact',target:second});assert.equal(t.inv.gold,8);
+  t.lootCorpse(second);assert.equal(t.inv.gold,8);
+});
+test('fuel and roasting are independent choices, including during roasting',()=>{
+  t.props.splice(0);t.player.x=0;t.player.y=0;t.fires.splice(0,t.fires.length,{x:0,y:0,lit:true,fuel:50});
+  t.inv.wood=5;t.inv.charcoal=0;t.inv.meat=3;t.inv.fish=0;t.keys.clear();
+  t.doActionNearby();assert.equal(t.inv.wood,4);assert.equal(t.inv.meat,3);
+  t.keys.add('ShiftLeft');t.doActionNearby();assert.equal(t.inv.meat,2);assert(t.roastJob);
+  t.keys.clear();t.doActionNearby();assert.equal(t.inv.wood,3);
+  t.updateRoastJob(4);assert(!t.roastJob);assert(t.saveGame(false));assert(t.loadGame());assert(t.inv._cookBoost.cooked);
+});
+test('winter cooling gives preparation time, insulation helps and fire warms',()=>{
+  const step=c.SeasonSys.approachTemperature;
+  let temp=50;for(let i=0;i<30;i++)temp=step(temp,12,1,false);assert(temp>22);
+  assert(step(50,12,30,true)>temp);assert(step(15,50,5,false)>30);
+  assert(Math.abs(step(50,12,30,false)-temp)<1e-9);
+});
+test('bear unlock and rank survive death, and old quest saves restore the unlock',()=>{
+  t.keys.clear();t.kill({kind:'bear',boss:true,x:0,y:0});assert(t.inv.warKit>=1);
+  t.dropCorpse();t.respawnAtCamp();t.toggleForm();assert.equal(t.player.form,'warrior');
+  t.inv.warKit=0;t.setState(2);assert(t.saveGame(false));assert(t.loadGame());assert(t.inv.warKit>=1);
+});
+test('map tracking reflects multiple remains and recovery',()=>{
+  t.props.splice(0);t.player.x=100;t.player.y=100;
+  t.inv.wood=1;t.dropCorpse();t.player.x=200;t.dropCorpse();
+  assert.equal(t.recoverableCorpses().length,2);assert.equal(t.nearbyPriorityAction(false).kind,'corpse');
+  t.lootCorpse(t.recoverableCorpses()[0]);assert.equal(t.recoverableCorpses().length,1);
+  t.saveGame(false);t.loadGame();assert.equal(t.recoverableCorpses().length,1);
+});
+test('new loot uses free stacks and excess stays on ground after saving',()=>{
+  for(const key of Object.keys(t.inv)) if(typeof t.inv[key]==='number')t.inv[key]=0;
+  t.inv.wood=19;const cap=t.inventorySlots();assert.equal(cap,1);
+  for(let i=0;i<14;i++)t.inv['testItem'+i]=40;
+  assert.equal(t.inventorySlots(),15);assert.equal(t.gainItem('wood',3),1);
+  assert.equal(t.inv.wood,20);let surplus=t.drops.find(d=>d.kind==='wood'&&d.n===2);assert(surplus);
+  assert.equal(t.tryPickupOne(surplus),false);assert.equal(surplus.n,2);
+  t.inv.testItem0=0;assert.equal(t.tryPickupOne(surplus),true);assert.equal(t.inv.wood,22);
+  const before={...t.inv};t.inv.gold=5;t.reconcileInventoryGains(before);assert.equal(t.inv.gold,0);
+  assert(t.drops.some(d=>d.kind==='gold'&&d.n===5));
+  t.saveGame(false);t.loadGame();assert(t.drops.some(d=>d.kind==='gold'&&d.n===5));
+});
+test('winter forecast reaches zero at winter and warns in advance',()=>{
+  assert.equal(c.SeasonSys.secondsUntilWinter(1470),90);
+  assert.equal(c.SeasonSys.secondsUntilWinter(1560),0);
+  assert.equal(c.SeasonSys.secondsUntilWinter(0),1560);
+  assert.equal(c.SeasonSys.secondsUntilWinter(2080+1470),90);
+});
+test('manual slot is independent, timestamped, and restores with backup',()=>{
+  for(const key of Object.keys(t.inv))if(key.startsWith('testItem'))delete t.inv[key];
+  t.setState(2);t.inv.gold=7;assert.match(t.saveManualSlot(),/已保存/);
+  const manual=JSON.parse(storage.get(t.saveKey+'-manual'));assert(Number.isFinite(manual.savedAt));
+  t.inv.gold=19;assert(t.saveGame(false));
+  assert.equal(JSON.parse(storage.get(t.saveKey+'-manual')).inv.gold,7);
+  assert.match(t.importSaveText(storage.get(t.saveKey+'-manual')),/成功/);
+  assert.equal(t.inv.gold,7);assert.equal(JSON.parse(storage.get(t.saveKey+'-backup')).inv.gold,19);
+});
+test('practice dummy records hits and spellwork without dying',()=>{
+  const dummy=t.entities.find(e=>e.practice);assert(dummy);
+  const original=dummy.hp;
+  for(let i=0;i<3;i++)t.hurt(dummy,100,'melee');
+  t.hurt(dummy,100,'fire');
+  assert.equal(dummy.hp,original);assert.equal(t.journey.training.hits,3);assert.equal(t.journey.training.spell,true);
+  t.journey.training.guard=true;
+  const q=t.quests.find(q=>q.id==='training');assert.equal(q.done,false);
+  t.updateQuests();assert.equal(q.done,true);assert.equal(t.journey.rewards.training,true);
+  const cooked=t.inv.cooked||0;t.updateQuests();assert.equal(t.inv.cooked||0,cooked);
+});
+test('completed objective rewards are one-time and reload cleanly',()=>{
+  const bear=t.quests.find(q=>q.id==='bear');bear.done=true;
+  const before=t.player.maxHp;
+  t.updateQuests();const awarded=t.player.maxHp;
+  assert(awarded>=before);assert.equal(t.journey.rewards.bear,true);
+  t.updateQuests();assert.equal(t.player.maxHp,awarded);
+  t.saveGame(false);t.loadGame();assert.equal(t.player.maxHp,awarded);
+});
+test('map waypoint requires explored ground and persists',()=>{
+  t.drawFullMap();assert.equal(t.setWaypointAt(-1,-1),false);
+  const x=640,y=360;const c=Math.floor((x-(1280-Math.min(1280-72,720-142,590))/2)/Math.min(1280-72,720-142,590)*425);
+  const r=Math.floor((y-((720-Math.min(1280-72,720-142,590))/2+8))/Math.min(1280-72,720-142,590)*425);
+  t.fog[r*425+c]=1;assert.equal(t.setWaypointAt(x,y),true);
+  const waypoint={...t.journey.waypoint};t.saveGame(false);t.loadGame();assert.deepEqual({...t.journey.waypoint},waypoint);
+});
+test('death report records danger near the fallen player',()=>{
+  const e=t.entities.find(e=>e.enemy&&!e.practice&&!e.dead);assert(e);
+  e.x=t.player.x+50;e.y=t.player.y;
+  t.recordDeath('bone');assert.equal(t.journey.lastDeath.cause,'飞骨');
+  assert(t.journey.lastDeath.nearby.includes(e.name));
+  t.saveGame(false);t.loadGame();assert.equal(t.journey.lastDeath.cause,'飞骨');
 });
 console.log(`${checks} expedition checks passed`);

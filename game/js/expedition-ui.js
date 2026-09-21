@@ -21,8 +21,12 @@
   }
   function render(){
     const data=api.describe();
+    const saves=api.saveStatus();
+    document.getElementById('kc-save-times').textContent='自动存档：'+saves.auto+' · 手动存档：'+saves.manual;
     document.getElementById('kc-goal').textContent=data.goal;
+    document.getElementById('kc-forecast').textContent=data.forecast > 0 ? '距离冬季约 '+Math.ceil(data.forecast)+' 秒。提前准备柴火、冬帽和暖石。' : '冬季进行中：靠近营火保暖，注意暴风雪预警。';
     document.getElementById('kc-upgrade').textContent=data.upgrade;
+    document.getElementById('kc-last-death').textContent=data.lastDeath ? '上次陨落：'+data.lastDeath.cause+' · 附近威胁：'+(data.lastDeath.nearby?.join('、')||'无') : '';
     document.getElementById('kc-upgrade-button').disabled=!data.canUpgrade;
     document.getElementById('kc-bucket-button').disabled=!data.canBucket;
     document.getElementById('kc-bucket').textContent=data.bucket;
@@ -59,8 +63,13 @@
     document.getElementById('kc-reset-keys').onclick=()=>{settings.bindings={};persist();render();status('已恢复默认按键。');};
     document.getElementById('kc-upgrade-button').onclick=()=>{status(api.upgrade());render();};
     document.getElementById('kc-bucket-button').onclick=()=>{status(api.craftBucket());render();};
+    document.getElementById('kc-save-manual').onclick=()=>{status(api.saveManual());render();};
+    document.getElementById('kc-load-manual').onclick=()=>{
+      if(!document.getElementById('kc-import-confirm').checked){status('请先勾选确认替换当前旅程。');return;}
+      status(api.restoreManual());render();
+    };
     document.getElementById('kc-save-export').onclick=()=>{
-      const text=api.exportSave();if(!text){status('没有可导出的存档，或本次保存失败。');return;}
+      const text=api.exportSave();render();if(!text){status('没有可导出的存档，或本次保存失败。');return;}
       const url=URL.createObjectURL(new Blob([text],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='kc-keep-save-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);status('已导出存档。');
     };
     const input=document.getElementById('kc-save-file');
