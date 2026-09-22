@@ -33,6 +33,13 @@
     document.getElementById('kc-fire-help').textContent=label('KeyB')+'：水桶空时靠岸装水；有水时向鼠标位置泼水。'+label('KeyV')+'：在鼠标位置铺一格防火带（石头 1）。';
     const list=document.getElementById('kc-objectives');list.replaceChildren();
     for(const item of data.objectives){const li=document.createElement('li');li.textContent=(item.done?'✓ ':'○ ')+item.text;list.append(li);}
+    const builds=document.getElementById('kc-builds');builds.replaceChildren();
+    for(const item of data.sandbox?.builds || []) {
+      const button=document.createElement('button');button.type='button';button.textContent=item.text;button.disabled=!item.enabled;
+      button.onclick=()=>{if(api.beginBuild(item.id))close();else{status('材料或建造条件不足。');render();}};builds.append(button);
+    }
+    document.getElementById('kc-sandbox-status').textContent=data.sandbox?.status || '';
+    document.getElementById('kc-home').textContent=data.sandbox?.home || '';
     const keys=document.getElementById('kc-bindings');keys.replaceChildren();
     for(const [code,name] of Object.entries(actions)){
       const row=document.createElement('label');row.textContent=name;
@@ -63,6 +70,9 @@
     document.getElementById('kc-reset-keys').onclick=()=>{settings.bindings={};persist();render();status('已恢复默认按键。');};
     document.getElementById('kc-upgrade-button').onclick=()=>{status(api.upgrade());render();};
     document.getElementById('kc-bucket-button').onclick=()=>{status(api.craftBucket());render();};
+    document.getElementById('kc-collect-resources').onclick=()=>{status(api.collectResources());render();};
+    document.getElementById('kc-settle-home').onclick=()=>{status(api.settleHome());render();};
+    document.getElementById('kc-start-trial').onclick=()=>{status(api.startTrial());render();};
     document.getElementById('kc-save-manual').onclick=()=>{status(api.saveManual());render();};
     document.getElementById('kc-load-manual').onclick=()=>{
       if(!document.getElementById('kc-import-confirm').checked){status('请先勾选确认替换当前旅程。');return;}

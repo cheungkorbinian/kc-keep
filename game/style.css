@@ -126,3 +126,6 @@ canvas#game {
 .kc-note { color:#645a48; }
 #kc-tutorial { position:fixed; top:58px; left:50%; transform:translateX(-50%); width:min(470px,38vw); background:rgba(24,44,43,.92); border:1px solid #bba16c; border-radius:6px; padding:10px 14px; color:#fff1d3; pointer-events:none; z-index:7; font-size:13px; line-height:1.5; }
 @media(max-width:700px) { #kc-toolbar { top:150px; } #kc-tutorial { top:196px; width:80vw; } #kc-bindings { grid-template-columns:repeat(2,1fr); } }
+
+.kc-builds { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.kc-builds button { text-align: left; min-height: 48px; }

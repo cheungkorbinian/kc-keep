@@ -15,6 +15,7 @@ for(const file of ['worldgen.js','enemies.js','seasons.js','dstsys.js','survival
 let src=fs.readFileSync(path.join(root,'game.js'),'utf8');
 src=src.slice(0,src.indexOf('  loadAll().then'))+'})();';
 src=src.replace('  resize();\n  window.__game',`  window.testAPI={recoverableCorpses,nearbyPriorityAction,inventorySlots,roomForItem,reconcileInventoryGains,tryPickupOne,spawnPickup,saveManualSlot,updateRoastJob,drawBagUI,setBagPage:v=>bagPage=v,dropCorpse,respawnAtCamp,lootCorpse,doActionNearby,doPrimaryAction,gainItem,bagItems,toggleForm,syncPrimaryFire,keys,get drops(){return drops;},get roastJob(){return roastJob;},saveGame,loadGame,snapshotWorld,validateSave,importSaveText,updateTiles,updateJourney,tryHarvest,tryInteract,useBucket,makeFirebreak,upgradeKeep,canUpgradeKeep,castSpell,updateProjectiles,kill,resetRunState,returnToMainMenu,
+  beginSandboxBuild,confirmSandboxBuild,sandboxPlacementValid,updateSandbox,collectSandboxResources,startBeaconTrial,cancelBeaconTrial,settleSandboxHome,safeHomePosition,
   hurt,recordDeath,updateQuests,grantQuestRewards,drawFullMap,setWaypointAt,updateEntities,
   get journey(){return journey;},get props(){return props;},get buildings(){return buildings;},get entities(){return entities;},get fires(){return fires;},get state(){return state;},get player(){return player;},get world(){return world;},get inv(){return inv;},get quests(){return quests;},get fireSystem(){return fireSystem;},get mouse(){return mouse;},get worldSeed(){return worldSeed;},get fog(){return fog;},get toolDur(){return toolDur;},get saveKey(){return SAVE_KEY;},setRain:v=>rain=v,setDay:v=>dayT=v,setState:v=>state=v};
   resize();\n  window.__game`);
@@ -96,8 +97,9 @@ test('valid import backs up the previous save',()=>{
   t.setState(3);const old=storage.get(t.saveKey);t.inv.gold=113;assert.match(t.importSaveText(old),/成功/);assert.equal(JSON.parse(storage.get(t.saveKey+'-backup')).inv.gold,113);
 });
 test('endgame requires both keep level 3 and the warlord',()=>{
+  t.setState(2);
   t.journey.victory=false;t.quests.find(q=>q.id==='warlord').done=false;t.updateJourney(.1);assert.equal(t.journey.victory,false);
-  t.quests.find(q=>q.id==='warlord').done=true;t.updateJourney(.1);assert.equal(t.journey.victory,true);
+  t.quests.find(q=>q.id==='warlord').done=true;t.updateJourney(.1);assert.equal(t.journey.victory,true);assert.equal(t.state,2);assert(!t.player._winTimer);
 });
 
 test('legacy saves still load without duplicate structures',()=>{
@@ -245,5 +247,66 @@ test('death report records danger near the fallen player',()=>{
   t.recordDeath('bone');assert.equal(t.journey.lastDeath.cause,'飞骨');
   assert(t.journey.lastDeath.nearby.includes(e.name));
   t.saveGame(false);t.loadGame();assert.equal(t.journey.lastDeath.cause,'飞骨');
+});
+// A cleared test plot isolates construction rules from randomly generated clutter.
+const plot={x:50.5*64,y:50.5*64};
+function clearTestPlot(){
+  for(const list of [t.props,t.buildings,t.entities,t.fires])for(let i=list.length-1;i>=0;i--)if(Math.hypot(list[i].x-plot.x,list[i].y-plot.y)<1200)list.splice(i,1);
+  for(let r=32;r<70;r++)for(let c=32;c<70;c++){t.world.tiles[r*425+c]=1;t.world.burn[r*425+c]=0;t.fog[r*425+c]=1;}
+  t.player.dead=false;t.setState(2);t.player.x=plot.x-128;t.player.y=plot.y;
+  for(const key of Object.keys(t.inv))if(typeof t.inv[key]==='number')t.inv[key]=0;
+  Object.assign(t.inv,{wood:100,rocks:100,gold:50,boards:20,berries:10});
+}
+test('free placement consumes materials only after a valid placement',()=>{
+  clearTestPlot();assert(t.beginSandboxBuild('chest'));const wood=t.inv.wood;
+  assert.equal(t.confirmSandboxBuild(0,0),false);assert.equal(t.inv.wood,wood);
+  assert(t.confirmSandboxBuild(plot.x,plot.y));assert.equal(t.inv.wood,wood-6);
+  assert(t.props.some(p=>p.kind==='chest'&&p.x===plot.x));
+  assert(t.beginSandboxBuild('chest'));assert.equal(t.confirmSandboxBuild(plot.x,plot.y),false);
+  assert.equal(t.inv.wood,wood-6);
+});
+test('planted groves regrow after harvesting and survive reload',()=>{
+  clearTestPlot();assert(t.beginSandboxBuild('grove'));assert(t.confirmSandboxBuild(plot.x,plot.y));
+  t.updateSandbox(90);let tree=t.props.find(p=>p.sandboxKind==='grove');assert.equal(tree.kind,'sapling');
+  t.saveGame(false);t.loadGame();tree=t.props.find(p=>p.sandboxKind==='grove');assert.equal(tree.age,90);
+  t.updateSandbox(90);assert.equal(tree.kind,'tree');
+  t.player.x=tree.x+25;t.player.y=tree.y;t.player.tool='axe';
+  for(let i=0;i<4;i++)t.tryHarvest(t.player.x,t.player.y,64,tree);
+  assert.equal(tree.kind,'stump');t.player.x=tree.x+128;
+  const fire={x:tree.x,y:tree.y,lit:false,fuel:0};t.fires.push(fire);t.updateSandbox(180);assert.equal(tree.kind,'stump');
+  t.fires.splice(t.fires.indexOf(fire),1);t.updateSandbox(.1);assert.equal(tree.kind,'tree');
+});
+test('quarry output is renewable, capped and collected only once',()=>{
+  clearTestPlot();assert(t.beginSandboxBuild('quarry'));assert(t.confirmSandboxBuild(plot.x,plot.y));
+  t.updateSandbox(720);let quarry=t.props.find(p=>p.sandboxKind==='quarry');assert.equal(quarry.stock,3);
+  t.updateSandbox(720);assert.equal(quarry.stock,3);
+  t.saveGame(false);t.loadGame();quarry=t.props.find(p=>p.sandboxKind==='quarry');assert.equal(quarry.stock,3);
+  const total=kind=>(t.inv[kind]||0)+t.drops.filter(d=>d.kind===kind).reduce((n,d)=>n+(d.n||1),0);
+  const rocks=total('rocks');assert.match(t.collectSandboxResources(),/收取 3/);assert.equal(total('rocks'),rocks+12);assert.equal(quarry.stock,0);
+  t.collectSandboxResources();assert.equal(total('rocks'),rocks+12);
+  t.updateSandbox(240);assert.equal(quarry.stock,1);
+});
+test('registered home controls respawn and persists',()=>{
+  clearTestPlot();assert(t.beginSandboxBuild('tent'));assert(t.confirmSandboxBuild(plot.x,plot.y));
+  assert.match(t.settleSandboxHome(),/已登记/);assert(t.safeHomePosition());
+  t.saveGame(false);t.loadGame();assert.equal(t.journey.home.x,plot.x);
+  t.player.x=8000;t.player.y=8000;t.respawnAtCamp();assert(Math.hypot(t.player.x-plot.x,t.player.y-plot.y)<220);
+});
+test('beacon unlock, interrupted save and repeatable reward work end to end',()=>{
+  clearTestPlot();const quest=t.quests.find(q=>q.id==='warlord');quest.done=false;
+  assert.equal(t.beginSandboxBuild('beacon'),false);quest.done=true;
+  assert(t.beginSandboxBuild('beacon'));assert(t.confirmSandboxBuild(plot.x,plot.y));
+  assert.match(t.startBeaconTrial(),/试炼开始/);t.updateSandbox(4);
+  assert.equal(t.journey.trial.wave,1);assert.equal(t.entities.filter(e=>e.beaconTrial&&!e.dead).length,2);
+  t.entities.find(e=>e.beaconTrial).hp=10;t.saveGame(false);t.loadGame();
+  assert.equal(t.entities.filter(e=>e.beaconTrial&&!e.dead).length,2);assert(t.entities.some(e=>e.beaconTrial&&e.hp===10));
+  for(let wave=1;wave<=3;wave++){for(const e of t.entities.filter(e=>e.beaconTrial&&!e.dead))t.kill(e);t.updateSandbox(4);}
+  assert.equal(t.journey.trial,null);assert.equal(t.journey.trialsCompleted,1);assert.equal(t.state,2);
+  assert.match(t.startBeaconTrial(),/恢复/);t.updateSandbox(120);assert.match(t.startBeaconTrial(),/试炼开始/);
+  t.updateSandbox(4);t.player.x+=1200;t.updateSandbox(.1);assert.equal(t.journey.trial,null);assert(!t.entities.some(e=>e.beaconTrial));
+});
+test('malformed sandbox saves are rejected',()=>{
+  t.saveGame(false);const data=JSON.parse(storage.get(t.saveKey));data.journey.trial={x:100,y:100,wave:1,level:0,delay:0,enemies:[{kind:'unknown',x:100,y:100,hp:10,maxHp:10}]};
+  assert.equal(t.validateSave(data),false);
 });
 console.log(`${checks} expedition checks passed`);

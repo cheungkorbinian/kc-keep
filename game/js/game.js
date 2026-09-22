@@ -790,6 +790,7 @@
   let saveToast = 0;
   let autoSaveAcc = 0;
   let mapOpen = false;
+  let pendingBuild = null;
   let mapRect = null;
   const SAVE_KEY = "moreshidian_save_v1";
   const MANUAL_SAVE_KEY = SAVE_KEY + "-manual";
@@ -3192,7 +3193,7 @@
     return true;
   }
 
-  function placeAhead(kind) {
+  function placeAhead(kind, position) {
     const ang = player.facing >= 0 ? 0 : Math.PI;
     let x = player.x + Math.cos(ang) * 56;
     let y = player.y + Math.sin(ang) * 20;
@@ -3201,6 +3202,7 @@
       x = (Math.floor(x / TILE) + 0.5) * TILE;
       y = (Math.floor(y / TILE) + 0.5) * TILE;
     }
+    if (position) { x = position.x; y = position.y; }
     if (!canPlaceBuild(x, y, kind)) {
       toast(kind === "boatkit" || kind === "grassboat" || kind === "seakit" || kind === "dock" ? "需要靠岸或合适的空地。" : "这里放不了（水面/障碍/太挤）。");
       return false;
@@ -3612,7 +3614,7 @@ function spawnPickup(x, y, kind, n = 1) {
     if (e === warlord) {
       quests.find((q) => q.id === "warlord").done = true;
       toast("红堡僭主已陨落。这座岛暂时安静了。", 5);
-      toast("继续重建 KC KEEP 至 3 级，即可完成远征。", 5);
+      toast("解锁回响信标！在远征手册建造，主动开启三波遗迹试炼。世界将继续运转。", 6);
     }
     if (e.kind === "bat_queen") {
       const q = quests.find((x) => x.id === "batqueen");
@@ -3699,6 +3701,7 @@ function spawnPickup(x, y, kind, n = 1) {
       floatText(e.x, e.y, "丝绸", "#e8e0f0");
     }
     if (e.kind === "player") {
+      cancelBeaconTrial(); pendingBuild=null;
       journey.tutorial.night=false;
       dropCorpse();
       toast("你倒下了……物资落在原地。点击可在营火旁重生。", 4);
@@ -3730,7 +3733,7 @@ function spawnPickup(x, y, kind, n = 1) {
 
   function respawnAtCamp() {
     if (!player) return;
-    // Respawn is anchored to the original keep, never the nearest travelling fire.
+    // Only an explicitly registered home changes the original respawn anchor.
     const home = landmarks && landmarks.camp;
     if (!home) { toast("找不到出生点。", 3); return; }
     player.dead = false;
@@ -3742,6 +3745,7 @@ function spawnPickup(x, y, kind, n = 1) {
     player.x = (home.c + 0.5) * TILE;
     player.y = (home.r + 5.5) * TILE;
     if (buildingBlocksXY(player.x, player.y, 8)) player.y = (home.r + 6.2) * TILE;
+    if(journey.home) { const pos=safeHomePosition(); if(pos){player.x=pos.x;player.y=pos.y;} }
     overworldReturn = null;
     projectiles.length = 0;
     player.attacking = 0;
@@ -3927,6 +3931,8 @@ function spawnPickup(x, y, kind, n = 1) {
     if (player.form === "warrior") { toast("先按 Q 卸甲，用锤子拆除。"); return; }
     player.tool = "hammer";
     player.hold = "hammer";
+    const custom=props.find(p=>p.sandboxKind && dist(player.x,player.y,p.x,p.y)<70);
+    if(custom) { if(custom.sandboxKind === "beacon" && journey.trial) {toast("试炼期间不能拆除信标。");return;} props.splice(props.indexOf(custom),1);toast("已移除设施。未收取产物不返还。");return; }
     let best = null, bestD = 70;
     for (const p of props) {
       if (p.kind !== "fence" && p.kind !== "haywall" && p.kind !== "woodwall" && p.kind !== "stonewall" && p.kind !== "chest" && p.kind !== "trap" && p.kind !== "farm") continue;
@@ -4466,6 +4472,7 @@ function spawnPickup(x, y, kind, n = 1) {
   }
 
   function onPrimaryDown() {
+    if (pendingBuild) { confirmSandboxBuild(mouse.wx, mouse.wy); return; }
     if (craftOpen || cookOpen || bagOpen || chestOpen) return;
     lmbDownAt = performance.now();
     lmbDrag = false;
@@ -4479,7 +4486,7 @@ function spawnPickup(x, y, kind, n = 1) {
   }
 
   function onPrimaryHold(dt) {
-    if (!mouse.left || craftOpen || cookOpen || bagOpen || chestOpen) return;
+    if (pendingBuild || !mouse.left || craftOpen || cookOpen || bagOpen || chestOpen) return;
     // DST draggingonground: hold LMB on open ground to keep walking toward cursor
     if (lmbDrag || resolveCursorPrimary().type === "walkto") {
       lmbDrag = true;
@@ -4957,7 +4964,7 @@ function spawnPickup(x, y, kind, n = 1) {
     checkExploreQuest();
     if (player._winTimer > 0) {
       player._winTimer -= dt;
-      if (player._winTimer <= 0) state = STATE.WIN;
+      if (player._winTimer <= 0) { toast("里程碑达成，旅程继续。", 4); }
     }
   }
 
@@ -7889,6 +7896,7 @@ function spawnPickup(x, y, kind, n = 1) {
   function drawProp(p) {
     const [sx, sy] = worldToScreen(p.x, p.y);
     if (sx < -220 || sy < -280 || sx > W + 220 || sy > H + 280) return;
+    if (p.sandboxKind && drawSandboxProp(p,sx,sy)) return;
     if (p.kind === "chest") {
       ctx.fillStyle = "#6b3e1f";
       ctx.fillRect(sx - 22, sy - 28, 44, 32);
@@ -8867,6 +8875,11 @@ function spawnPickup(x, y, kind, n = 1) {
       ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
 
+    if(journey.home) {
+      ctx.fillStyle='#78edab';ctx.strokeStyle='#173d2b';ctx.lineWidth=2;
+      ctx.fillRect(sx(journey.home.x/TILE)-4,sy(journey.home.y/TILE)-4,8,8);
+      ctx.strokeRect(sx(journey.home.x/TILE)-4,sy(journey.home.y/TILE)-4,8,8);
+    }
     // Camera frame
     const vx = sx(camera.x / TILE);
     const vy = sy(camera.y / TILE);
@@ -10941,7 +10954,7 @@ function spawnPickup(x, y, kind, n = 1) {
 
   function resetRunState() {
     for (const key of Object.keys(inv)) delete inv[key];
-    journey = newJourney(); mapOpen = false; mapRect = null;
+    journey = newJourney(); mapOpen = false; mapRect = null; pendingBuild=null;
     inv.bucket = 0; inv.bucketWater = 0;
     inv.wood = 0; inv.gold = 0; inv.meat = 2; inv.fish = 0; inv.honey = 0; inv.torch = 0; inv.lantern = 0; inv.cooked = 0; inv.warKit = 0; inv.warmstone = 0; inv.berries = 0; inv.seeds = 0; inv.jam = 0; inv.meatpie = 0; inv.spicy = 0; inv.trail = 0; inv.feast = 0; inv.mapscroll = 0;
     inv.boards = 0; inv.rope = 0; inv.cutstone = 0; inv.rocks = 0; inv.monster = 0; inv.trinket = 0; inv.dung = 0; inv.flint = 0; inv.twigs = 0; inv.grass = 0; inv.carrot = 0; inv.carrot_seed = 0;
@@ -11094,6 +11107,7 @@ function spawnPickup(x, y, kind, n = 1) {
   function saveGame(verbose) {
     if ((state !== STATE.PLAY && state !== STATE.PAUSE) || !player) return false;
     try {
+      snapshotBeaconTrial();
       const data = {
         v: 3, savedAt: Date.now(),
         journey, worldChanges: snapshotWorld(),
@@ -11281,7 +11295,8 @@ function spawnPickup(x, y, kind, n = 1) {
     }
     if (data.onIsland && islandHub) onIsland = true;
     if (data.onSeaIsland && seaIsland) onSeaIsland = true;
-    chestOpen = null; mapOpen = false; mapRect = null;
+    chestOpen = null; mapOpen = false; mapRect = null; pendingBuild=null;
+    restoreBeaconTrial();
     craftOpen = false;
     if (window.DstSys) {
       if (!houndClock) houndClock = window.DstSys.createHoundClock();
@@ -11342,7 +11357,7 @@ function spawnPickup(x, y, kind, n = 1) {
       return;
     }
     if (state === STATE.WIN) {
-      if (mouse.leftClick) { state = STATE.MENU; }
+      if (mouse.leftClick) { state = STATE.PLAY; }
       return;
     }
     if (state !== STATE.PLAY || mapOpen) return;
@@ -11394,6 +11409,7 @@ function spawnPickup(x, y, kind, n = 1) {
     updateTiles(dt);
     updatePlayer(dt);
     updateEntities(dt);
+    updateSandbox(dt);
     separateEntities(dt);
     updateProjectiles(dt);
     reconcileInventoryGains(beforeFrame);
@@ -11412,6 +11428,7 @@ function spawnPickup(x, y, kind, n = 1) {
     drawOverlays();
     drawAttackWarnings();
     drawHUD();
+    drawSandboxOverlay();
     drawActionTarget();
     if (mapOpen && state === STATE.PLAY) drawFullMap();
     if (state === STATE.PAUSE) drawPauseMenu();
@@ -11421,7 +11438,7 @@ function spawnPickup(x, y, kind, n = 1) {
         : "物资落在倒下之处。点击返回据点，地图红点标记遗物。";
       drawPauseLike("陨落 · 战斗回顾",recap,"据点重生");
     }
-    if (state === STATE.WIN) drawPauseLike("KC KEEP 重建完成", "三级据点屹立，红堡僭主已败。远征完成！可从主菜单继续探索你的世界。", "返回主菜单");
+    if (state === STATE.WIN) drawPauseLike("KC KEEP 重建完成", "三级据点屹立，红堡僭主已败。里程碑达成，继续建设与探索你的世界。", "继续旅程");
   }
 
   function drawAttackWarnings() {
@@ -11463,11 +11480,12 @@ function spawnPickup(x, y, kind, n = 1) {
     for(const place of [landmarks.camp,landmarks.ruin,landmarks.red,landmarks.mines,landmarks.forest])
       if(place && inb(place.c,place.r) && fog[idx(place.c,place.r)])
         mark((place.c+.5)*TILE,(place.r+.5)*TILE,"#e8c875",4);
+    if(journey.home)mark(journey.home.x,journey.home.y,"#78edab",6);
     for(const body of recoverableCorpses())mark(body.x,body.y,"#b84d59",4.5);
     if(journey.waypoint)mark(journey.waypoint.x,journey.waypoint.y,"#55dcec",6);
     mark(player.x,player.y,"#ffe56a",6);
     ctx.fillStyle="#423220";ctx.font="12px sans-serif";
-    ctx.fillText("黄点：你 · 蓝点：路标 · 红点：遗物 · 未探索区域保持遮蔽",W/2,y+size+27);
+    ctx.fillText("黄：你 · 蓝：路标 · 红：遗物 · 绿：自建家园 · 黑：未探索",W/2,y+size+27);
   }
 
   function setWaypointAt(x,y) {
@@ -11514,6 +11532,7 @@ function spawnPickup(x, y, kind, n = 1) {
     const code = state === STATE.PLAY ? window.KCUI.mapped(event.code) : event.code;
     const e = {code, preventDefault:()=>event.preventDefault()};
     keys.add(code);
+    if (state === STATE.PLAY && pendingBuild && code === "Escape") { pendingBuild=null; keys.clear(); e.preventDefault(); return; }
     if(state === STATE.PLAY && !craftOpen && !cookOpen && !bagOpen && !chestOpen && !event.repeat && code === 'KeyB'){useBucket();return;}
     if(state === STATE.PLAY && !craftOpen && !cookOpen && !bagOpen && !chestOpen && !event.repeat && code === 'KeyV'){makeFirebreak();return;}
     if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
@@ -11705,7 +11724,7 @@ function spawnPickup(x, y, kind, n = 1) {
       return true;
     }
     if (state === STATE.WIN) {
-      state = STATE.MENU;
+      state = STATE.PLAY;
       return true;
     }
     return false;
@@ -11725,7 +11744,7 @@ function spawnPickup(x, y, kind, n = 1) {
     }
     if (e.button === 2) {
       mouse.right = true;
-      if (state === STATE.PLAY) {if(mapOpen) {journey.waypoint=null;toast("路标已清除。",2);} else onSecondaryDown();}
+      if (state === STATE.PLAY) {if(pendingBuild) {pendingBuild=null;} else if(mapOpen) {journey.waypoint=null;toast("路标已清除。",2);} else onSecondaryDown();}
     }
   });
   window.addEventListener("mouseup", (e) => {
@@ -11756,8 +11775,191 @@ function spawnPickup(x, y, kind, n = 1) {
     e.preventDefault();
   }, { passive: false });
 
+  // The sandbox builds on the existing world snapshot: player-made resources never reset terrain.
+  const SANDBOX_BUILDS = {
+    campfire:{name:'营火',cost:{wood:3}},
+    chest:{name:'储物箱',cost:{wood:6}},
+    woodwall:{name:'木墙',cost:{boards:2}},
+    tent:{name:'家园住所',cost:{wood:12,rocks:6}},
+    berrybush:{name:'浆果园',cost:{wood:2,berries:2}},
+    grove:{name:'再生树苗',cost:{wood:1}},
+    quarry:{name:'采石场',cost:{wood:8,rocks:6}},
+    beacon:{name:'回响信标',cost:{rocks:12,gold:6},boss:true},
+  };
+  function sandboxAvailable() { return player && !player.dead && [STATE.PLAY,STATE.PAUSE].includes(state); }
+  function beaconUnlocked() { return quests.some(q=>q.id==='warlord' && q.done); }
+  function settlementPoint() { return journey.home || {x:landmarks.camp.c*TILE,y:landmarks.camp.r*TILE}; }
+  function safeHomePosition() {
+    if(!journey.home || !buildings.some(b=>b.owned && b.tent && dist(b.x,b.y,journey.home.x,journey.home.y)<1))return null;
+    for(let ring=1;ring<=5;ring++)for(let i=0;i<12;i++) {
+      const a=i*Math.PI/6,pos={x:journey.home.x+Math.cos(a)*ring*40,y:journey.home.y+Math.sin(a)*ring*40};
+      if(inb(Math.floor(pos.x/TILE),Math.floor(pos.y/TILE)) && !collides({...player,...pos}))return pos;
+    }
+    return null;
+  }
+  function settleSandboxHome() {
+    if(!sandboxAvailable() || inCave || onIsland || onSeaIsland)return '请在大陆自建住所旁登记家园。';
+    const house=buildings.find(b=>b.owned && b.tent && dist(player.x,player.y,b.x,b.y)<140);
+    if(!house)return '靠近自建家园住所（140 范围内），再登记。';
+    journey.home={x:house.x,y:house.y};
+    saveGame(false);return '新家园已登记：在这里升级、恢复与重生。住所被拆除时回到初始据点。';
+  }
+  function beginSandboxBuild(kind) {
+    const recipe=SANDBOX_BUILDS[kind];
+    if(!sandboxAvailable() || !recipe || inCave)return false;
+    if(recipe.boss && !beaconUnlocked()){toast('先击败红堡僭主，解锁信标图纸。');return false;}
+    if(!canAfford(recipe.cost)){toast('材料不足。');return false;}
+    pendingBuild=kind;craftOpen=false;bagOpen=false;cookOpen=false;chestOpen=null;mapOpen=false;
+    clearMoveTarget();mouse.left=false;mouse.leftClick=false;
+    toast('选择空地：左键建造，右键或 Esc 取消。成功放置才消耗材料。',4);
+    return true;
+  }
+  function sandboxPosition(x,y) { return {x:(Math.floor(x/TILE)+.5)*TILE,y:(Math.floor(y/TILE)+.5)*TILE}; }
+  function sandboxPlacementValid(kind,pos) {
+    if(!sandboxAvailable() || inCave || !SANDBOX_BUILDS[kind])return false;
+    if(dist(player.x,player.y,pos.x,pos.y)>240 || dist(player.x,player.y,pos.x,pos.y)<42)return false;
+    const c=Math.floor(pos.x/TILE),r=Math.floor(pos.y/TILE);
+    if(!inb(c,r) || !fog[idx(c,r)] || !canPlaceBuild(pos.x,pos.y,kind))return false;
+    const radius=kind==='tent'?84:40;
+    if(buildings.some(b=>b.solid!==false && (hitsBuildingVisual(b,pos.x,pos.y,radius) || dist(b.x,b.y,pos.x,pos.y)<radius)))return false;
+    if(props.some(p=>!p.gone && dist(p.x,p.y,pos.x,pos.y)<radius))return false;
+    if(fires.some(f=>dist(f.x,f.y,pos.x,pos.y)<radius))return false;
+    if(entities.some(e=>!e.dead && dist(e.x,e.y,pos.x,pos.y)<radius))return false;
+    return true;
+  }
+  function confirmSandboxBuild(x,y) {
+    const kind=pendingBuild,recipe=SANDBOX_BUILDS[kind],pos=sandboxPosition(x,y);
+    if(!recipe || !sandboxPlacementValid(kind,pos)){toast('需要 240 范围内已探索的空地，避开水面、人物和设施。');return false;}
+    if(!canAfford(recipe.cost) || (recipe.boss && !beaconUnlocked())){toast('材料或解锁条件不足。');return false;}
+    if(['grove','quarry','beacon'].includes(kind)) {
+      props.push({kind:kind==='grove'?'sapling':kind,sandboxKind:kind,...pos,hp:99,max:99,solid:false,fw:64,fh:64,frames:1,age:0,stock:0,cooldown:0});
+    } else if(!placeAhead(kind,pos))return false;
+    payCost(recipe.cost);pendingBuild=null;mouse.left=false;mouse.leftClick=false;lmbDrag=false;clearMoveTarget();
+    toast(recipe.name+'已建成。',2);return true;
+  }
+  function collectSandboxResources() {
+    if(!sandboxAvailable())return '进入旅程后再收取。';
+    const sources=props.filter(p=>p.sandboxKind==='quarry' && p.stock>0 && dist(player.x,player.y,p.x,p.y)<140);
+    if(!sources.length)return '靠近采石场收取（140 范围内）；每 240 秒产一批，最多储存三批。';
+    let batches=0;
+    for(const p of sources){const n=p.stock;p.stock=0;batches+=n;gainItem('rocks',n*4);gainItem('flint',n*2);gainItem('gold',n);}
+    return '收取 '+batches+' 批：每批石头 4、燧石 2、金子 1。背包满时留在脚边。';
+  }
+  function cancelBeaconTrial() {
+    if(!journey.trial)return;
+    for(let i=entities.length-1;i>=0;i--)if(entities[i].beaconTrial)entities.splice(i,1);
+    journey.trial=null;toast('已离开试炼，守卫消散。信标可重新启动。',3);
+  }
+  function startBeaconTrial() {
+    if(!sandboxAvailable() || !beaconUnlocked())return '击败红堡僭主后解锁回响试炼。';
+    if(journey.trial)return '已有试炼正在进行。';
+    const b=props.find(p=>p.sandboxKind==='beacon' && dist(player.x,player.y,p.x,p.y)<140);
+    if(!b)return '请靠近你建造的回响信标（140 范围内）。';
+    if(b.cooldown>0)return '信标正在恢复，剩余 '+Math.ceil(b.cooldown)+' 秒。';
+    journey.trial={x:b.x,y:b.y,wave:0,delay:4,enemies:[],level:Math.min(5,journey.trialsCompleted||0)};
+    return '试炼开始：三波守卫，4 秒后出现。离开 900 范围或死亡会取消。';
+  }
+  function snapshotBeaconTrial() {
+    if(!journey.trial)return;
+    journey.trial.enemies=entities.filter(e=>e.beaconTrial&&!e.dead).map(e=>({kind:e.kind,x:e.x,y:e.y,hp:e.hp,maxHp:e.maxHp}));
+  }
+  function createBeaconEnemy(kind,x,y,trial) {
+    const e=spawnEnemy(kind,x,y,false);e.beaconTrial=true;e.raid=true;e.name='回响守卫';
+    e.maxHp=Math.round(e.maxHp*(1+trial.level*.1));e.hp=e.maxHp;e.aggro=1100;e.dmg*=1+trial.level*.05;
+    return e;
+  }
+  function restoreBeaconTrial() {
+    if(!journey.trial)return;
+    for(const data of journey.trial.enemies || []) {
+      const e=createBeaconEnemy(data.kind,data.x,data.y,journey.trial);
+      e.hp=data.hp;e.maxHp=data.maxHp;
+    }
+  }
+  function updateSandbox(dt) {
+    for(const p of props) {
+      if(!p.sandboxKind)continue;
+      if(p.sandboxKind==='grove') {
+        if(p.kind==='tree'){p.age=0;continue;}
+        p.age=(p.age||0)+dt;
+        if(p.age>=180 && !buildings.some(b=>b.solid!==false&&hitsBuildingVisual(b,p.x,p.y,30)) && !props.some(o=>o!==p&&!o.gone&&dist(o.x,o.y,p.x,p.y)<40) && !fires.some(f=>dist(f.x,f.y,p.x,p.y)<40) && dist(player.x,player.y,p.x,p.y)>40) {
+          const sheet=treeSheetFor(imgs.tree1);
+          Object.assign(p,{kind:'tree',img:imgs.tree1,stumpImg:imgs.stump,hp:4,max:4,solid:true,fw:sheet.fw,fh:sheet.fh,frames:sheet.frames,age:0});
+        }
+      } else if(p.sandboxKind==='quarry') {
+        if(p.stock<3) {p.age=(p.age||0)+dt;while(p.age>=240 && p.stock<3){p.age-=240;p.stock++;}}
+      } else if(p.cooldown>0)p.cooldown=Math.max(0,p.cooldown-dt);
+    }
+    if(journey.home && !buildings.some(b=>b.owned && b.tent && dist(b.x,b.y,journey.home.x,journey.home.y)<1))journey.home=null;
+    const trial=journey.trial;if(!trial)return;
+    if(player.dead || inCave || dist(player.x,player.y,trial.x,trial.y)>900){cancelBeaconTrial();return;}
+    if(entities.some(e=>e.beaconTrial&&!e.dead))return;
+    trial.delay-=dt;if(trial.delay>0)return;
+    if(trial.wave>=3) {
+      journey.trialsCompleted=(journey.trialsCompleted||0)+1;
+      journey.trial=null;
+      const beacon=props.find(p=>p.sandboxKind==='beacon'&&dist(p.x,p.y,trial.x,trial.y)<1);
+      if(beacon)beacon.cooldown=120;
+      gainItem('gold',6);gainItem('boards',4);gainItem('cutstone',4);
+      toast('回响试炼完成！金子 6、木板 4、石砖 4。信标 120 秒后可再次启动。',6);
+      saveGame(false);return;
+    }
+    const count=trial.wave+2,points=[];
+    for(let i=0;i<48 && points.length<count;i++) {
+      const a=i*Math.PI/12,r=200+Math.floor(i/24)*80;
+      const pos={x:trial.x+Math.cos(a)*r,y:trial.y+Math.sin(a)*r};
+      if(inb(Math.floor(pos.x/TILE),Math.floor(pos.y/TILE)) && !collides({...pos,r:18,kind:'warrior'}) && points.every(p=>dist(p.x,p.y,pos.x,pos.y)>70))points.push(pos);
+    }
+    if(points.length<count){trial.delay=5;toast('信标周围空间不足。清理 200–280 范围内的障碍再继续。',3);return;}
+    trial.wave++;trial.delay=4;
+    points.forEach((p,i)=>createBeaconEnemy(i===count-1?'archer':'lancer',p.x,p.y,trial));
+    toast('回响试炼 · 第 '+trial.wave+'/3 波',3);
+  }
+  function describeSandbox() {
+    const names={wood:'木材',rocks:'石头',gold:'金子',boards:'木板',berries:'浆果'};
+    return {
+      builds:Object.entries(SANDBOX_BUILDS).map(([id,r])=>({id,text:r.name+' · '+Object.entries(r.cost).map(([k,n])=>names[k]+' '+n).join(' / ')+(r.boss&&!beaconUnlocked()?' · 需击败红堡僭主':''),enabled:!!sandboxAvailable() && !inCave && canAfford(r.cost) && (!r.boss||beaconUnlocked())})),
+      status:journey.trial?'回响试炼 '+journey.trial.wave+'/3 波 · 存活守卫 '+entities.filter(e=>e.beaconTrial&&!e.dead).length:'已完成 '+(journey.trialsCompleted||0)+' 次试炼。'+(beaconUnlocked()?'信标已解锁，可主动开启。':'击败红堡僭主可解锁回响信标。'),
+      home:journey.home?'已登记自建家园，重生和据点升级以此为中心。':'家园位于初始据点。可在自建住所旁重新登记。',
+    };
+  }
+  function drawSandboxProp(p,x,y) {
+    if(p.sandboxKind==='grove' && ['tree','stump'].includes(p.kind))return false;
+    ctx.save();ctx.lineWidth=3;ctx.textAlign='center';ctx.font='11px sans-serif';
+    let label='';
+    if(p.sandboxKind==='grove') {
+      ctx.fillStyle='#67462a';ctx.fillRect(x-3,y-27,6,28);
+      ctx.fillStyle='#63a564';ctx.beginPath();ctx.ellipse(x-7,y-24,13,7,-.6,0,Math.PI*2);ctx.ellipse(x+9,y-34,13,7,.6,0,Math.PI*2);ctx.fill();
+      label='树苗 '+Math.max(0,Math.ceil(180-p.age))+'s';
+    } else if(p.sandboxKind==='quarry') {
+      ctx.fillStyle='#45433c';ctx.beginPath();ctx.ellipse(x,y,27,15,0,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='#b3a38b';ctx.stroke();ctx.strokeStyle='#976a3d';ctx.beginPath();ctx.moveTo(x-22,y);ctx.lineTo(x-16,y-38);ctx.lineTo(x+16,y-38);ctx.lineTo(x+22,y);ctx.stroke();
+      label='采石场 '+p.stock+'/3';
+    } else {
+      ctx.fillStyle='#737d8b';ctx.fillRect(x-17,y-20,34,22);ctx.fillStyle='#59d5cf';
+      ctx.beginPath();ctx.moveTo(x,y-61);ctx.lineTo(x+12,y-39);ctx.lineTo(x,y-22);ctx.lineTo(x-12,y-39);ctx.closePath();ctx.fill();
+      label=p.cooldown>0?'恢复 '+Math.ceil(p.cooldown)+'s':'回响信标';
+    }
+    ctx.fillStyle='#fff2cc';ctx.fillText(label,x,y-70);ctx.restore();return true;
+  }
+  function drawSandboxOverlay() {
+    if(state!==STATE.PLAY || mapOpen)return;
+    ctx.save();ctx.textAlign='center';ctx.font='bold 14px sans-serif';
+    if(pendingBuild) {
+      const pos=sandboxPosition(mouse.wx,mouse.wy),valid=sandboxPlacementValid(pendingBuild,pos),[x,y]=worldToScreen(pos.x,pos.y);
+      ctx.fillStyle=valid?'rgba(70,220,160,.3)':'rgba(240,80,70,.3)';ctx.strokeStyle=valid?'#60efb6':'#f87f73';ctx.lineWidth=3;
+      const radius=pendingBuild==='tent'?84:40;
+      ctx.fillRect(x-radius,y-radius,radius*2,radius*2);ctx.strokeRect(x-radius,y-radius,radius*2,radius*2);
+      ctx.fillStyle='#10242b';ctx.fillRect(20,H-142,W-40,38);ctx.fillStyle='#fff2cc';
+      ctx.fillText(SANDBOX_BUILDS[pendingBuild].name+' · 左键放置 · 右键 / Esc 取消',W/2,H-118);
+    } else if(journey.trial) {
+      ctx.fillStyle='#10242b';ctx.fillRect(20,H-142,W-40,38);ctx.fillStyle='#a6f3ed';
+      ctx.fillText('回响试炼 '+journey.trial.wave+'/3 · 守卫 '+entities.filter(e=>e.beaconTrial&&!e.dead).length+' · 离开 900 范围取消',W/2,H-118);
+    }
+    ctx.restore();
+  }
+
   function newJourney() {
-    return { keepLevel: 0, waypoint:null, rewards:{}, training:{hits:0,spell:false,guard:false}, lastDeath:null, tutorial: {wood:false,food:false,fuel:false,night:false,dawn:false}, victory:false };
+    return { keepLevel: 0, home:null, trialsCompleted:0, trial:null, waypoint:null, rewards:{}, training:{hits:0,spell:false,guard:false}, lastDeath:null, tutorial: {wood:false,food:false,fuel:false,night:false,dawn:false}, victory:false };
   }
 
   function captureWorldBaseline() {
@@ -11835,19 +12037,19 @@ function spawnPickup(x, y, kind, n = 1) {
   const resourceNames={wood:'木材',rocks:'石头',gold:'金子',boards:'木板',cutstone:'石砖'};
   function keepRequirement() {
     const next=KEEP_UPGRADES[journey.keepLevel];
-    if(!next)return '据点已完成。击败北方红堡僭主，完成远征。';
+    if(!next)return journey.victory ? "据点已重建。自由探索、扩建家园与回响试炼将持续开放。" : "据点已重建。击败红堡僭主可达成里程碑并解锁回响信标。";
     const cost=Object.entries(next.cost).map(([k,n])=>resourceNames[k]+' '+(inv[k]||0)+'/'+n).join(' · ');
     return next.name+'：'+cost+'。'+next.benefit+(journey.keepLevel===1?'。还需探索荒野、洞穴或离岛。':journey.keepLevel===2?'。还需击败熊王、巨魔、牛头人或蝠后之一。':'');
   }
   function canUpgradeKeep() {
     if(!player||player.dead||![STATE.PLAY,STATE.PAUSE].includes(state)||!landmarks.camp)return false;
     const next=KEEP_UPGRADES[journey.keepLevel];if(!next)return false;
-    return dist(player.x,player.y,landmarks.camp.c*TILE,landmarks.camp.r*TILE)<300
+    return dist(player.x,player.y,settlementPoint().x,settlementPoint().y)<300
       && Object.entries(next.cost).every(([k,n])=>(inv[k]||0)>=n)
       && (!next.quest||quests.some(q=>next.quest.includes(q.id)&&q.done));
   }
   function upgradeKeep() {
-    if(!canUpgradeKeep())return '请回到初始营地，并满足材料与探索条件。';
+    if(!canUpgradeKeep())return '请回到你的家园，并满足材料与探索条件。';
     const next=KEEP_UPGRADES[journey.keepLevel];
     for(const [k,n] of Object.entries(next.cost))inv[k]-=n;
     journey.keepLevel++;player.maxHp+=15;player.hp=Math.min(player.maxHp,player.hp+15);
@@ -11860,11 +12062,11 @@ function spawnPickup(x, y, kind, n = 1) {
     if(inv.berries>0||inv.cooked>0||inv.meat>2||inv.fish>0)t.food=true;
     if(isNight())t.night=true;
     if(t.night&&!isNight())t.dawn=true;
-    if(journey.keepLevel>0&&dist(player.x,player.y,landmarks.camp.c*TILE,landmarks.camp.r*TILE)<160) {
+    if(journey.keepLevel>0&&dist(player.x,player.y,settlementPoint().x,settlementPoint().y)<160) {
       player.hp=Math.min(player.maxHp,player.hp+dt*journey.keepLevel*0.6);
     }
     if(journey.keepLevel===3&&quests.some(q=>q.id==='warlord'&&q.done)&&!journey.victory){
-      journey.victory=true;saveGame(false);player._winTimer=1.4;
+      journey.victory=true;saveGame(false);toast("重建里程碑达成！继续建造、探索，或挑战回响信标。",6);
     }
   }
   function tutorialSteps() {
@@ -11878,8 +12080,9 @@ function spawnPickup(x, y, kind, n = 1) {
   }
   function describeJourney() {
     return {
-      goal:player?'据点等级 '+journey.keepLevel+'/3。最终目标：重建据点并击败北方红堡僭主。':'开始或继续旅程后可以升级据点。',
-      upgrade:keepRequirement()+' 升级需要人在初始营地附近。',canUpgrade:canUpgradeKeep(),
+      sandbox:describeSandbox(),
+      goal:player?'据点等级 '+journey.keepLevel+'/3。重建与首领是里程碑：世界可以一直玩下去。':'开始或继续旅程后可以建造自己的家园。',
+      upgrade:keepRequirement()+' 升级需要人在家园附近（可在自建住所登记）。',canUpgrade:canUpgradeKeep(),
       forecast:window.SeasonSys.secondsUntilWinter(seasonT),
       lastDeath:journey.lastDeath,
       bucket:inv.bucket?'已拥有水桶 · 剩余 '+(inv.bucketWater||0)+' 次泼水。':'水桶可以装水扑灭一小片火焰。',
@@ -11888,7 +12091,7 @@ function spawnPickup(x, y, kind, n = 1) {
     };
   }
   function drawActionTarget() {
-    if(state!==STATE.PLAY||craftOpen||cookOpen||bagOpen||chestOpen||window.KCUI.isOpen)return;
+    if(state!==STATE.PLAY||pendingBuild||mapOpen||craftOpen||cookOpen||bagOpen||chestOpen||window.KCUI.isOpen)return;
     const act=resolveCursorPrimary();if(!act.target)return;
     const h=act.type==='attack'?actorHit(act.target):propHit(act.target);
     const far=dist(player.x,player.y,h.x,h.y)>72+h.r*0.35;
@@ -11934,6 +12137,14 @@ function spawnPickup(x, y, kind, n = 1) {
     if(data.journey?.rewards!=null && (!record(data.journey.rewards)||Object.values(data.journey.rewards).some(v=>typeof v!=="boolean")))return false;
     if(data.journey?.lastDeath!=null && (!point(data.journey.lastDeath)||typeof data.journey.lastDeath.cause!=="string"||!Array.isArray(data.journey.lastDeath.nearby)))return false;
     if(data.journey?.training!=null && (!record(data.journey.training)||!Number.isFinite(data.journey.training.hits)||data.journey.training.hits<0))return false;
+    const sandboxPoint=p=>point(p)&&p.x>=0&&p.y>=0&&p.x<WORLD_SIZE.cols*TILE&&p.y<WORLD_SIZE.rows*TILE;
+    if(data.journey?.home!=null&&!sandboxPoint(data.journey.home))return false;
+    if(data.journey?.trialsCompleted!=null&&(!Number.isInteger(data.journey.trialsCompleted)||data.journey.trialsCompleted<0||data.journey.trialsCompleted>1e6))return false;
+    if(data.journey?.trial!=null) {
+      const t=data.journey.trial;
+      if(!sandboxPoint(t)||!Number.isInteger(t.wave)||t.wave<0||t.wave>3||!Number.isInteger(t.level)||t.level<0||t.level>5||!Number.isFinite(t.delay)||Math.abs(t.delay)>60||!Array.isArray(t.enemies)||t.enemies.length>4)return false;
+      if(t.enemies.some(e=>!sandboxPoint(e)||!['lancer','archer'].includes(e.kind)||!Number.isFinite(e.hp)||!Number.isFinite(e.maxHp)||e.hp<=0||e.hp>e.maxHp||e.maxHp>1000))return false;
+    }
     if(data.v===3){
       const w=data.worldChanges;if(!w)return false;
       for(const kind of ['props','buildings']){
@@ -11943,6 +12154,8 @@ function spawnPickup(x, y, kind, n = 1) {
         if([...w[kind].changed,...w[kind].added].some(p=>p && (p.imageKey!=null&&typeof p.imageKey!=='string')))return false;
         if([...w[kind].changed,...w[kind].added].some(p=>p && p.imageRefs!=null && (!record(p.imageRefs)||Object.values(p.imageRefs).some(key=>typeof key!=='string'))))return false;
         if([...w[kind].changed,...w[kind].added].some(p=>!p||typeof p.kind!=='string'||!Number.isFinite(p.x)||!Number.isFinite(p.y)))return false;
+        if([...w[kind].changed,...w[kind].added].some(p=>p.sandboxKind!=null &&
+          (!['grove','quarry','beacon'].includes(p.sandboxKind)||!Number.isFinite(p.age)||p.age<0||!Number.isInteger(p.stock)||p.stock<0||p.stock>3||!Number.isFinite(p.cooldown)||p.cooldown<0)))return false;
       }
       if(!['terrain','defeated','drops','fires'].every(k=>Array.isArray(w[k])))return false;
       if(w.terrain.some(t=>!Array.isArray(t)||t.length!==5||!t.every(Number.isFinite)||!Number.isInteger(t[0])||t[0]<0||t[0]>=WORLD_SIZE.cols*WORLD_SIZE.rows||![0,1,2,3,4].includes(t[1])))return false;
@@ -12002,6 +12215,7 @@ function spawnPickup(x, y, kind, n = 1) {
     open:()=>{panelPreviousState=state;if(state===STATE.PLAY)state=STATE.PAUSE;keys.clear();mouse.left=false;mouse.right=false;mouse.leftClick=false;mouse.rightClick=false;lmbDrag=false;clearMoveTarget();},
     close:()=>{state=panelPreviousState;keys.clear();},
     describe:describeJourney,upgrade:upgradeKeep,
+    beginBuild:beginSandboxBuild,collectResources:collectSandboxResources,startTrial:startBeaconTrial,settleHome:settleSandboxHome,
     craftBucket:()=>{if(!player||![STATE.PLAY,STATE.PAUSE].includes(state)||inv.bucket||(inv.wood||0)<3||(inv.rocks||0)<2)return '材料不足或已拥有水桶。';inv.wood-=3;inv.rocks-=2;inv.bucket=1;inv.bucketWater=0;return '水桶制作完成。靠近水边按 '+window.KCUI.label('KeyB')+' 装水。';},
     exportSave:()=>{if((state===STATE.PLAY||state===STATE.PAUSE)&&player&&!saveGame(true))return null;return localStorage.getItem(SAVE_KEY);},
     importSave:importSaveText,
