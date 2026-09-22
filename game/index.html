@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KC KEEP · KC据点</title>
+  <link rel="stylesheet" href="style.css?v=90.5" />
+</head>
+<body>
+  <div id="boot">
+    <div class="boot-card">
+      <div class="boot-kicker">AN ADVENTURE AWAITS</div>
+      <h1><span class="boot-kc">KC</span> KEEP</h1>
+      <p class="boot-cn">KC据点</p>
+      <p class="boot-sub">探索荒野 · 建造家园 · 让世界继续生长</p>
+      <div class="load-track"><i id="loadfill"></i></div>
+      <span id="loadtext">正在展开地图……</span>
+    </div>
+  </div>
+  <canvas id="game" tabindex="0" aria-label="KC KEEP 游戏画面"></canvas>
+  <nav id="kc-toolbar" hidden aria-label="游戏菜单"><button id="kc-open-journal">远征手册</button><button id="kc-open-settings">设置 / 存档</button></nav>
+  <p id="kc-tutorial" hidden aria-live="polite"></p>
+  <dialog id="kc-panel" aria-labelledby="kc-panel-title">
+    <header><h2 id="kc-panel-title">远征手册</h2><button id="kc-close" aria-label="关闭并返回">关闭 ×</button></header>
+    <p class="kc-note">打开此面板时游戏暂停。</p>
+    <section id="kc-journal">
+      <h3>重建 KC KEEP</h3><p id="kc-goal"></p><p id="kc-forecast"></p><p id="kc-upgrade"></p><button id="kc-upgrade-button">升级据点</button>
+      <h3>自由建造与再生资源</h3>
+      <p>选择蓝图后在世界中左键放置（240 范围内）；绿色可建，红色受阻。右键 / Esc 取消，成功放置才扣材料。</p>
+      <div id="kc-builds" class="kc-builds"></div>
+      <p>再生树苗 180 秒长成树；砍伐后保留树桩会再生，挖掉树桩则停止。采石场每 240 秒产石头 4、燧石 2、金子 1，最多储存三批。暂停时不生长。</p>
+      <button id="kc-collect-resources">收取附近采石场产物</button>
+      <p id="kc-home"></p><button id="kc-settle-home">在附近自建住所登记家园</button>
+      <h3>首领之后 · 回响试炼</h3><p id="kc-sandbox-status"></p>
+      <p>击败红堡僭主获得信标图纸。建好后靠近并主动开启三波战斗；完成奖励金子 6、木板 4、石砖 4。离开 900 范围或死亡会取消。冷却 120 秒可重复挑战，强度随完成次数小幅提高，五次后封顶。</p>
+      <button id="kc-start-trial">开启附近信标试炼</button>
+      <h3>消防装备</h3><p id="kc-bucket"></p><button id="kc-bucket-button">制作水桶 · 木材 3 / 石头 2</button>
+      <p id="kc-fire-help">B：水边装水；有水时向鼠标位置泼水。V：在鼠标位置铺一格防火带（石头 1）。按键可在设置中调整。</p>
+      <p>冰法可以灭火；湿地短时间内不会复燃。火焰最多蔓延两格，同时最多燃烧 24 格。</p>
+      <h3>第一夜与探索目标</h3><p id="kc-last-death"></p><ul id="kc-objectives"></ul>
+    </section>
+    <section id="kc-settings" hidden>
+      <h3>音效与提示</h3><label>音量 <input id="kc-volume" type="range" min="0" max="1" step="0.05"></label>
+      <label><input id="kc-tutorial-toggle" type="checkbox"> 显示第一夜引导</label>
+      <h3>按键设置</h3><p>点击按键后按新的键；冲刺 Shift、暂停 Esc、法术 1/2/3 保留。</p><div id="kc-bindings"></div><button id="kc-reset-keys">恢复默认按键</button>
+      <h3>存档备份</h3>
+      <p id="kc-save-times" aria-live="polite"></p>
+      <p>自动存档每 90 秒更新；手动存档是独立槽位，不会被自动保存覆盖。</p>
+      <button id="kc-save-manual">保存到手动槽</button>
+      <button id="kc-load-manual">读取手动槽</button><p>导出文件可留作备份或移到另一台电脑。导入会替换当前旅程；原存档保留为一份本地备份。</p>
+      <button id="kc-save-export">保存并导出 JSON</button>
+      <label><input id="kc-import-confirm" type="checkbox"> 我确认用备份替换当前旅程</label>
+      <label>导入存档 <input id="kc-save-file" type="file" accept=".json,application/json"></label><button id="kc-restore-backup">恢复导入前的备份</button>
+    </section>
+    <p id="kc-status" role="status" aria-live="polite"></p>
+  </dialog>
+  <script src="js/worldgen.js?v=90.5"></script>
+  <script src="js/enemies.js?v=90.5"></script>
+  <script src="js/seasons.js?v=90.5"></script>
+  <script src="js/dstsys.js?v=90.5"></script>
+  <script src="js/audio.js?v=90.5"></script>
+  <script src="js/survival.js?v=90.5"></script>
+  <script src="js/expedition-ui.js?v=90.5"></script>
+  <script src="js/game.js?v=90.5"></script>
+</body>
+</html>
